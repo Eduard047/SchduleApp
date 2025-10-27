@@ -1,0 +1,354 @@
+@page "/admin/buildings"
+@using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
+@inject BlazorWasmDotNet8AspNetCoreHosted.Client.Services.IAdminApi Admin
+
+<PageTitle>Адмін • Корпуси</PageTitle>
+
+<h3 class="mb-3">Корпуси</h3>
+
+@if (!string.IsNullOrWhiteSpace(error))
+{
+    <div class="alert alert-danger">@error</div>
+}
+@if (!string.IsNullOrWhiteSpace(ok))
+{
+    <div class="alert alert-success">@ok</div>
+}
+
+@if (loading)
+{
+    <div class="alert alert-info">Завантаження…</div>
+}
+else
+{
+    <div class="row g-3">
+        <div class="col-lg-4">
+            <div class="card p-3">
+                <h6 class="mb-3">@((form.Id is null ? "Додати корпус" : $"Редагувати корпус #{form.Id}"))</h6>
+
+                <div class="mb-2">
+                    <label class="form-label">Назва</label>
+                    <input class="form-control" @bind="form.Name" />
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Адреса</label>
+                    <input class="form-control" @bind="form.Address" />
+                </div>
+
+                <div class="d-flex gap-2">
+                    <button class="btn btn-primary" @onclick="SaveBuilding">Зберегти</button>
+                    <button class="btn btn-outline-secondary" @onclick="() => form = new() { Id = null, Name = string.Empty, Address = null }">Скинути</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-8">
+            <div class="card p-3">
+                <div class="d-flex justify-content-between align-items-center mb-2 gap-2">
+                    <h6 class="m-0">Список корпусів</h6>
+
+                    
+                    <div class="input-group" style="max-width:360px;">
+                        <span class="input-group-text">Пошук</span>
+                        <input class="form-control" @bind="filterBuildings" @bind:event="oninput" placeholder="Id / назва / адреса" />
+                    </div>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle">
+                        <thead>
+                            <tr>
+                                <th style="width:80px;" class="sortable-th" role="button"
+                                    @onclick="() => ToggleSortB(nameof(BuildingEditDto.Id))">
+                                    Id @HeaderIconB(nameof(BuildingEditDto.Id))
+                                </th>
+                                <th class="sortable-th" role="button"
+                                    @onclick="() => ToggleSortB(nameof(BuildingEditDto.Name))">
+                                    Назва @HeaderIconB(nameof(BuildingEditDto.Name))
+                                </th>
+                                <th class="sortable-th" role="button"
+                                    @onclick="() => ToggleSortB(nameof(BuildingEditDto.Address))">
+                                    Адреса @HeaderIconB(nameof(BuildingEditDto.Address))
+                                </th>
+                                <th style="width:160px;"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var b in SortedBuildings)
+                            {
+                                <tr>
+                                    <td>@b.Id</td>
+                                    <td>@b.Name</td>
+                                    <td>@b.Address</td>
+                                    <td class="text-end">
+                                        <button class="btn btn-sm btn-outline-primary me-2" @onclick="() => form = new() { Id = b.Id, Name = b.Name, Address = b.Address }">Редагувати</button>
+                                        <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteBuilding(b.Id!.Value)">Видалити</button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    <div class="small text-muted">Показано: @SortedBuildings.Count() з @buildings.Count</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <h4 class="mt-4 mb-2">Час на дорогу між корпусами</h4>
+    <div class="card p-3">
+        <div class="row g-2 align-items-end">
+            <div class="col-12 col-md-4">
+                <label class="form-label">З корпусу</label>
+                <select class="form-select" @bind="travelFromId">
+                    <option value="0">— Оберіть —</option>
+                    @foreach (var b in buildings.OrderBy(x => x.Name))
+                    {
+                        <option value="@b.Id">@b.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label">До корпусу</label>
+                <select class="form-select" @bind="travelToId">
+                    <option value="0">— Оберіть —</option>
+                    @foreach (var b in buildings.OrderBy(x => x.Name))
+                    {
+                        <option value="@b.Id">@b.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="form-label">Хвилин</label>
+                <input type="number" min="0" class="form-control" @bind="travelMinutes" />
+            </div>
+            <div class="col-6 col-md-2 d-grid">
+                <button class="btn btn-primary" @onclick="SaveTravel">Зберегти</button>
+            </div>
+        </div>
+
+        
+        <div class="d-flex justify-content-between align-items-center mt-3 mb-2 gap-2">
+            <div class="input-group" style="max-width:420px;">
+                <span class="input-group-text">Пошук</span>
+                <input class="form-control" @bind="filterTravels" @bind:event="oninput" placeholder="з / до / хвилин" />
+            </div>
+            <div class="small text-muted">Показано: @SortedTravels.Count() з @travels.Count</div>
+        </div>
+
+        <div class="table-responsive">
+            <table class="table table-sm align-middle">
+                <thead>
+                    <tr>
+                        <th class="sortable-th" role="button" @onclick="() => ToggleSortT(FromField)">
+                            З @HeaderIconT(FromField)
+                        </th>
+                        <th class="sortable-th" role="button" @onclick="() => ToggleSortT(ToField)">
+                            До @HeaderIconT(ToField)
+                        </th>
+                        <th style="width:120px;" class="sortable-th" role="button" @onclick="() => ToggleSortT(nameof(BuildingTravelEditDto.Minutes))">
+                            Хвилин @HeaderIconT(nameof(BuildingTravelEditDto.Minutes))
+                        </th>
+                        <th style="width:120px;"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var t in SortedTravels)
+                    {
+                        <tr>
+                            <td>@NameOf(t.FromBuildingId)</td>
+                            <td>@NameOf(t.ToBuildingId)</td>
+                            <td>@t.Minutes</td>
+                            <td class="text-end">
+                                <button class="btn btn-sm btn-outline-primary me-2" @onclick="() => LoadTravelToForm(t)">Редагувати</button>
+                                <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteTravel(t)">Видалити</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    private sealed class BuildingsVm
+    {
+        public List<BuildingEditDto> buildings { get; set; } = new();
+        public List<BuildingTravelEditDto> travels { get; set; } = new();
+    }
+
+    
+    private bool loading;
+    private string? error, ok;
+    private List<BuildingEditDto> buildings = new();
+    private List<BuildingTravelEditDto> travels = new();
+
+    private BuildingEditDto form = new() { Id = null, Name = string.Empty, Address = null };
+
+    
+    private int travelFromId, travelToId, travelMinutes;
+
+    
+    private string? filterBuildings;
+    private string sortFieldB = nameof(BuildingEditDto.Name);
+    private bool sortAscB = true;
+
+    
+    private string? filterTravels;
+    private const string FromField = "From";
+    private const string ToField = "To";
+    private string sortFieldT = FromField;
+    private bool sortAscT = true;
+
+    protected override async Task OnInitializedAsync() => await Load();
+
+    private async Task Load()
+    {
+        try
+        {
+            loading = true; error = ok = null;
+            buildings = await Admin.GetBuildings();
+            travels = await Admin.GetBuildingTravels();
+        }
+        catch (Exception ex) { error = ex.Message; }
+        finally { loading = false; }
+    }
+
+    private async Task SaveBuilding()
+    {
+        try
+        {
+            await Admin.UpsertBuilding(form);
+            await Load();
+            ok = "Збережено.";
+            form = new() { Id = null, Name = string.Empty, Address = null };
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private async Task DeleteBuilding(int id)
+    {
+        try
+        {
+            await Admin.DeleteBuilding(id);
+            await Load();
+            ok = "Видалено.";
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private void LoadTravelToForm(BuildingTravelEditDto t)
+    {
+        travelFromId = t.FromBuildingId;
+        travelToId = t.ToBuildingId;
+        travelMinutes = t.Minutes;
+    }
+
+    private async Task SaveTravel()
+    {
+        try
+        {
+            var dto = new BuildingTravelEditDto(travelFromId, travelToId, travelMinutes);
+            await Admin.UpsertBuildingTravel(dto);
+            await Load();
+            ok = "Збережено.";
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private async Task DeleteTravel(BuildingTravelEditDto t)
+    {
+        try
+        {
+            await Admin.DeleteBuildingTravel(t.FromBuildingId, t.ToBuildingId);
+            await Load();
+            ok = "Видалено.";
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    
+    private string NameOf(int id) => buildings.FirstOrDefault(b => b.Id == id)?.Name ?? $"#{id}";
+
+    
+    private IEnumerable<BuildingEditDto> ApplyFilterB(IEnumerable<BuildingEditDto> seq)
+    {
+        if (string.IsNullOrWhiteSpace(filterBuildings)) return seq;
+        var f = filterBuildings.Trim();
+
+        return seq.Where(b =>
+            b.Id?.ToString().Contains(f, StringComparison.OrdinalIgnoreCase) == true ||
+            (b.Name?.Contains(f, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (b.Address?.Contains(f, StringComparison.OrdinalIgnoreCase) ?? false)
+        );
+    }
+
+    private IEnumerable<BuildingEditDto> ApplySortB(IEnumerable<BuildingEditDto> seq)
+    {
+        return (sortFieldB, sortAscB) switch
+        {
+            (nameof(BuildingEditDto.Id), true) => seq.OrderBy(x => x.Id),
+            (nameof(BuildingEditDto.Id), false) => seq.OrderByDescending(x => x.Id),
+
+            (nameof(BuildingEditDto.Name), true) => seq.OrderBy(x => x.Name),
+            (nameof(BuildingEditDto.Name), false) => seq.OrderByDescending(x => x.Name),
+
+            (nameof(BuildingEditDto.Address), true) => seq.OrderBy(x => x.Address).ThenBy(x => x.Name),
+            (nameof(BuildingEditDto.Address), false) => seq.OrderByDescending(x => x.Address).ThenByDescending(x => x.Name),
+
+            _ => seq
+        };
+    }
+
+    private IEnumerable<BuildingEditDto> SortedBuildings => ApplySortB(ApplyFilterB(buildings));
+
+    private void ToggleSortB(string field)
+    {
+        if (sortFieldB == field) sortAscB = !sortAscB;
+        else { sortFieldB = field; sortAscB = true; }
+    }
+
+    private MarkupString HeaderIconB(string field)
+        => new(sortFieldB == field ? $"<span class=\"ms-1\">{(sortAscB ? "▲" : "▼")}</span>" : "");
+
+    
+    private IEnumerable<BuildingTravelEditDto> ApplyFilterT(IEnumerable<BuildingTravelEditDto> seq)
+    {
+        if (string.IsNullOrWhiteSpace(filterTravels)) return seq;
+        var f = filterTravels.Trim();
+
+        return seq.Where(t =>
+            NameOf(t.FromBuildingId).Contains(f, StringComparison.OrdinalIgnoreCase) ||
+            NameOf(t.ToBuildingId).Contains(f, StringComparison.OrdinalIgnoreCase) ||
+            t.Minutes.ToString().Contains(f, StringComparison.OrdinalIgnoreCase)
+        );
+    }
+
+    private IEnumerable<BuildingTravelEditDto> ApplySortT(IEnumerable<BuildingTravelEditDto> seq)
+    {
+        return (sortFieldT, sortAscT) switch
+        {
+            (FromField, true) => seq.OrderBy(x => NameOf(x.FromBuildingId)).ThenBy(x => NameOf(x.ToBuildingId)),
+            (FromField, false) => seq.OrderByDescending(x => NameOf(x.FromBuildingId)).ThenByDescending(x => NameOf(x.ToBuildingId)),
+
+            (ToField, true) => seq.OrderBy(x => NameOf(x.ToBuildingId)).ThenBy(x => NameOf(x.FromBuildingId)),
+            (ToField, false) => seq.OrderByDescending(x => NameOf(x.ToBuildingId)).ThenByDescending(x => NameOf(x.FromBuildingId)),
+
+            (nameof(BuildingTravelEditDto.Minutes), true) => seq.OrderBy(x => x.Minutes).ThenBy(x => NameOf(x.FromBuildingId)),
+            (nameof(BuildingTravelEditDto.Minutes), false) => seq.OrderByDescending(x => x.Minutes).ThenByDescending(x => NameOf(x.FromBuildingId)),
+
+            _ => seq
+        };
+    }
+
+    private IEnumerable<BuildingTravelEditDto> SortedTravels => ApplySortT(ApplyFilterT(travels));
+
+    private void ToggleSortT(string field)
+    {
+        if (sortFieldT == field) sortAscT = !sortAscT;
+        else { sortFieldT = field; sortAscT = true; }
+    }
+
+    private MarkupString HeaderIconT(string field)
+        => new(sortFieldT == field ? $"<span class=\"ms-1\">{(sortAscT ? "▲" : "▼")}</span>" : "");
+}

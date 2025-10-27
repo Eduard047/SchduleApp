@@ -1,0 +1,819 @@
+@page "/schedule"
+@using System.Globalization
+@using System.Linq
+@using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
+@using BlazorWasmDotNet8AspNetCoreHosted.Client.Services
+@inject HttpClient Http
+@inject IScheduleApi ScheduleApi
+
+@code {
+    
+    private MetaResponseDto? _meta;
+
+    private int? _groupId;
+    private int? _teacherId;
+    private int? _roomId;
+
+    
+    private DateOnly _weekStart = FirstMonday(DateOnly.FromDateTime(DateTime.Today));
+
+    
+    private List<ScheduleItemDto> _items = new();
+    private List<TimeSlotDto> _slots = new();
+
+    
+    private int? _editItemId;
+    private int _editLessonTypeId;
+    private bool _editSaving;
+    private string? _editError;
+
+    
+    private static readonly int[] DaysMonFirst = new[] { 1, 2, 3, 4, 5, 6, 0 };
+
+    
+    private record SlotRow(string Start, string End)
+    {
+        public string Label => $"{Start}-{End}";
+    }
+    private List<SlotRow> _rows = new();
+
+    
+    private IEnumerable<ScheduleItemDto> Filtered =>
+        _items.Where(i =>
+            (_groupId is null || i.GroupId == _groupId) &&
+            (_teacherId is null || i.TeacherId == _teacherId) &&
+            (_roomId is null || i.RoomId == _roomId)
+        );
+
+    
+    private string WeekRangeLabel
+    {
+        get
+        {
+            var ci = new CultureInfo("uk-UA");
+            var from = _weekStart.ToDateTime(TimeOnly.MinValue).ToString("d MMMM yyyy", ci);
+            var to = _weekStart.AddDays(6).ToDateTime(TimeOnly.MinValue).ToString("d MMMM yyyy", ci);
+            return $"{from} — {to}";
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _meta = await Http.GetFromJsonAsync<MetaResponseDto>("api/meta");
+        await Reload();
+    }
+
+    private async Task Reload()
+    {
+        
+        _items = await Http.GetFromJsonAsync<List<ScheduleItemDto>>(
+            $"api/schedule?weekStart={_weekStart:yyyy-MM-dd}") ?? new();
+
+        
+        var eff = await Http.GetFromJsonAsync<EffectiveSlotsResponse>("api/admin/config/slots");
+        _slots = eff?.slots ?? new();
+
+        
+        _rows = _slots
+            .Select(s => new SlotRow(s.Start, s.End))
+            .GroupBy(x => (x.Start, x.End))
+            .Select(g => g.First())
+            .OrderBy(x => x.Start)
+            .ToList();
+
+        if (_editItemId is int editing && !_items.Any(i => i.Id == editing))
+        {
+            CancelEdit();
+        }
+    }
+
+    private static DateOnly FirstMonday(DateOnly d)
+    {
+        int diff = ((int)d.DayOfWeek + 6) % 7; 
+        return d.AddDays(-diff);
+    }
+
+    
+    private sealed record EffectiveSlotsResponse(int? courseId, bool usingCourseSpecific, List<TimeSlotDto> slots);
+
+    
+    static string DayNameUk(int d)
+    {
+        var ci = new CultureInfo("uk-UA");
+        var name = ci.DateTimeFormat.GetDayName((DayOfWeek)d); 
+        return ci.TextInfo.ToTitleCase(name);
+    }
+
+    
+    static string CssByCode(string code) => code switch
+    {
+        "LECTURE" => "lec",
+        "SEMINAR" => "sem",
+        "LAB" => "lab",
+        "PRACTICE" => "prc",   
+        "CANCELED" => "can",
+        "RESCHEDULED" => "res", 
+        "BREAK" => "brk",
+        _ => ""
+    };
+
+    private static string LessonModeLabel(bool requiresRoom) => requiresRoom ? "Аудиторний захід" : "Дистанційна форма";
+
+    private string ModuleCourseCaption(int moduleId)
+    {
+        if (_meta is null) return string.Empty;
+        var module = _meta.Modules.FirstOrDefault(m => m.Id == moduleId);
+        return module is null || string.IsNullOrWhiteSpace(module.CourseName)
+            ? string.Empty
+            : module.CourseName;
+    }
+
+    private Task PrevWeek() { _weekStart = _weekStart.AddDays(-7); return Reload(); }
+    private Task NextWeek() { _weekStart = _weekStart.AddDays(+7); return Reload(); }
+    private void ResetFilters()
+    {
+        _groupId = _teacherId = _roomId = null;
+        StateHasChanged();
+    }
+
+    
+    private void BeginEdit(ScheduleItemDto item)
+    {
+        if (item.IsLocked) return;
+        _editItemId = item.Id;
+        _editLessonTypeId = item.LessonTypeId;
+        _editError = null;
+    }
+
+    
+    private void CancelEdit()
+    {
+        _editItemId = null;
+        _editError = null;
+    }
+
+    
+    private void OnLessonTypeChanged(ChangeEventArgs args)
+    {
+        if (int.TryParse(args.Value?.ToString(), out var id))
+        {
+            _editLessonTypeId = id;
+        }
+    }
+
+    
+    private async Task SaveLessonTypeAsync()
+    {
+        if (_editItemId is null) return;
+        var item = _items.FirstOrDefault(x => x.Id == _editItemId);
+        if (item is null)
+        {
+            CancelEdit();
+            return;
+        }
+
+        _editSaving = true;
+        _editError = null;
+        try
+        {
+            var payload = new UpsertScheduleItemRequest(
+                Id: item.Id,
+                Date: item.Date,
+                TimeStart: item.TimeStart,
+                TimeEnd: item.TimeEnd,
+                GroupId: item.GroupId,
+                ModuleId: item.ModuleId,
+                TeacherId: item.TeacherId,
+                RoomId: item.RoomId,
+                LessonTypeId: _editLessonTypeId,
+                IsLocked: item.IsLocked,
+                OverrideNonWorkingDay: false
+            );
+
+            await ScheduleApi.Upsert(payload);
+            await Reload();
+            CancelEdit();
+        }
+        catch (ApiErrorException ex)
+        {
+            _editError = ex.Errors.FirstOrDefault() ?? ex.Message;
+        }
+        catch (Exception ex)
+        {
+            _editError = ex.Message;
+        }
+        finally
+        {
+            _editSaving = false;
+        }
+    }
+}
+
+<h3 class="page-title">Розклад <span class="weak">(тиждень @_weekStart.ToString("yyyy-MM-dd"))</span></h3>
+
+
+<div class="toolbar">
+
+    <select class="select" @bind="_groupId">
+        <option value="">Обрати групу</option>
+        @if (_meta is not null)
+        {
+            foreach (var g in _meta.Groups)
+            {
+                <option value="@g.Id">@g.Name</option>
+            }
+        }
+    </select>
+
+    <select class="select select--narrow" @bind="_teacherId">
+        <option value="">Обрати викладача</option>
+        @if (_meta is not null)
+        {
+            foreach (var t in _meta.Teachers)
+            {
+                <option value="@t.Id">@t.Name</option>
+            }
+        }
+    </select>
+
+    <select class="select" @bind="_roomId">
+        <option value="">Обрати аудиторію</option>
+        @if (_meta is not null)
+        {
+            foreach (var r in _meta.Rooms)
+            {
+                <option value="@r.Id">@r.Name</option>
+            }
+        }
+    </select>
+
+    <input type="date"
+           class="select"
+           value="@_weekStart.ToString("yyyy-MM-dd")"
+           @onchange="e => _weekStart = FirstMonday(DateOnly.Parse((string)e.Value!))" />
+
+    <button class="btn btn-primary" @onclick="Reload">Оновити</button>
+    <button class="btn btn-ghost" @onclick="ResetFilters">Скинути</button>
+</div>
+
+@if (_rows.Count == 0)
+{
+    <div class="empty">Для цього тижня не знайдено визначених тайм-слотів. Додайте їх у конфігурації.</div>
+}
+else
+{
+    <div class="layout">
+        
+        <aside class="legend">
+            <div class="legend-title">Позначення</div>
+            <div class="legend-row"><span class="dot dot-lec"></span>Лекція</div>
+            <div class="legend-row"><span class="dot dot-sem"></span>Семінар</div>
+            <div class="legend-row"><span class="dot dot-lab"></span>Лабораторне</div>
+            <div class="legend-row"><span class="dot dot-prc"></span>Практичне</div>
+            <div class="legend-row"><span class="dot dot-can"></span>Скасоване заняття</div>
+        </aside>
+
+        
+        <div class="grid-wrap">
+            <table class="schedule">
+                <thead>
+                    <tr>
+                        <th class="col-time">Час</th>
+                        @foreach (var d in DaysMonFirst)
+                        {
+                            <th>@DayNameUk(d)</th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in _rows)
+                    {
+                        <tr>
+                            <th class="time-cell">
+                                <span class="time-pill">@row.Label</span>
+                            </th>
+
+                            @foreach (var d in DaysMonFirst)
+                            {
+                                var item = Filtered.FirstOrDefault(x =>
+                                x.DayNumber == d &&
+                                x.TimeStart == row.Start &&
+                                x.TimeEnd == row.End);
+
+                                <td class="cell">
+                                    @if (item is not null)
+                                    {
+                                        var colorCss = item.LessonTypeCss ?? CssByCode(item.LessonTypeCode);
+                                        <div class="card @colorCss">
+                                            <div class="card-top">
+                                                <span class="badge">@item.LessonTypeName</span>
+                                                @if (item.IsLocked)
+                                                {
+                                                    <span class="lock" title="Зафіксовано">🔒</span>
+                                                }
+                                            </div>
+                                            @if (!item.IsLocked && _editItemId != item.Id)
+                                            {
+                                                <button type="button"
+                                                        class="card-edit-trigger"
+                                                        @onclick="() => BeginEdit(item)"
+                                                        title="Редагувати тип заняття">
+                                                    <span class="td-edit-icon" aria-hidden="true">✎</span>
+                                                </button>
+                                            }
+                                            @{
+                                                var isBreak = string.Equals(item.LessonTypeCode, "BREAK", StringComparison.OrdinalIgnoreCase);
+                                                
+                                                var moduleCourse = isBreak ? string.Empty : ModuleCourseCaption(item.ModuleId);
+                                            }
+                                            <div class="title">
+                                                <div>@item.Module</div>
+                                                @if (!string.IsNullOrWhiteSpace(moduleCourse))
+                                                {
+                                                    <div class="title-course text-muted small">@moduleCourse</div>
+                                                }
+                                            </div>
+                                            @if (!isBreak && !string.IsNullOrWhiteSpace(item.Group))
+                                            {
+                                                <div class="sub">@item.Group</div>
+                                            }
+                                            @if (!isBreak)
+                                            {
+                                                <div class="meta">
+                                                    <span class="slot-mode">@LessonModeLabel(item.RequiresRoom)</span>
+                                                    @if (!string.IsNullOrWhiteSpace(item.Teacher))
+                                                    {
+                                                        <span>@item.Teacher</span>
+                                                    }
+                                                    @if (!string.IsNullOrWhiteSpace(item.Room))
+                                                    {
+                                                        <span>@item.Room @(!string.IsNullOrWhiteSpace(item.Building) ? $"({item.Building})" : "")</span>
+                                                    }
+                                                </div>
+                                            }
+                                            @if (_editItemId == item.Id)
+                                            {
+                                                <div class="card-edit">
+                                                    <label class="card-edit-field">
+                                                        <span class="card-edit-label">Тип заняття</span>
+                                                        <select class="card-edit-select"
+                                                                value="@_editLessonTypeId"
+                                                                @onchange="OnLessonTypeChanged"
+                                                                disabled="@_editSaving">
+                                                            @foreach (var lt in _meta?.LessonTypes ?? Enumerable.Empty<IdCodeNameDto>())
+                                                            {
+                                                                <option value="@lt.Id">@lt.Name</option>
+                                                            }
+                                                        </select>
+                                                    </label>
+                                                    @if (!string.IsNullOrWhiteSpace(_editError))
+                                                    {
+                                                        <div class="card-edit-error">@_editError</div>
+                                                    }
+                                                    <div class="card-edit-actions">
+                                                        <button type="button"
+                                                                class="btn btn-primary btn-sm"
+                                                                disabled="@_editSaving"
+                                                                @onclick="SaveLessonTypeAsync">
+                                                            @if (_editSaving)
+                                                            {
+                                                                <span class="spinner-border spinner-border-sm" role="status"></span>
+                                                            }
+                                                            <span>Зберегти</span>
+                                                        </button>
+                                                        <button type="button"
+                                                                class="btn btn-ghost btn-sm"
+                                                                disabled="@_editSaving"
+                                                                @onclick="CancelEdit">
+                                                            Скасувати
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    
+    <div class="week-nav">
+        <button class="btn btn-ghost" @onclick="PrevWeek">‹ Попередній тиждень</button>
+        <div class="week-label">@WeekRangeLabel</div>
+        <button class="btn btn-ghost" @onclick="NextWeek">Наступний тиждень ›</button>
+    </div>
+}
+
+<style>
+    
+    .page-title {
+        margin: .5rem 0 1rem;
+    }
+
+        .page-title .weak {
+            color: #64748b;
+            font-weight: 400;
+        }
+
+    
+    .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .5rem;
+        align-items: center;
+        margin-bottom: 12px;
+    }
+
+    .select {
+        min-width: 160px;
+        padding: .46rem .6rem;
+        border: 1px solid #dfe3e8;
+        border-radius: 10px;
+        background: #fff;
+    }
+    
+    .toolbar .select {
+        flex: 0 0 auto;
+    }
+    
+    .select--narrow {
+        width: 240px;
+        max-width: 240px;
+    }
+
+    .btn {
+        padding: .5rem .9rem;
+        border-radius: 10px;
+        border: 1px solid transparent;
+        cursor: pointer;
+    }
+
+    .btn-primary {
+        background: #111827;
+        color: #fff;
+    }
+
+    .btn-ghost {
+        background: #fff;
+        color: #111827;
+        border-color: #d1d5db;
+    }
+
+    .title-course {
+        font-weight: 500;
+        font-size: .8rem;
+        margin-top: .1rem;
+    }
+
+    .empty {
+        color: #64748b;
+    }
+
+    
+    .layout {
+        display: flex;
+        gap: 16px;
+        align-items: flex-start;
+    }
+
+    .legend {
+        min-width: 240px;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 16px;
+        padding: 14px;
+        position: sticky;
+        top: 8px;
+    }
+
+    .legend-title {
+        font-weight: 700;
+        margin-bottom: .5rem;
+    }
+
+    .legend-row {
+        display: flex;
+        align-items: center;
+        gap: .5rem;
+        margin: .35rem 0;
+    }
+
+    .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        display: inline-block;
+    }
+
+    .dot-lec {
+        background: #5aa3ff;
+    }
+
+    .dot-sem {
+        background: #37c06a;
+    }
+
+    .dot-lab {
+        background: #ffb400;
+    }
+
+    .dot-prc {
+        background: #a78bfa;
+    }
+    
+    .dot-can {
+        background: #ff5a5a;
+    }
+
+    .grid-wrap {
+        width: 100%;
+        overflow: auto;
+    }
+
+    
+    table.schedule {
+        width: 100%;
+        table-layout: fixed;
+        border-collapse: separate;
+        border-spacing: 0;
+        background: #fff;
+    }
+
+        table.schedule thead th {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            background: #fff;
+            padding: .7rem .6rem;
+            text-transform: capitalize;
+            text-align: center;
+            border-bottom: 1px solid #e5e7eb;
+            border-right: 1px solid #e5e7eb;
+        }
+
+            table.schedule thead th:first-child {
+                border-left: 1px solid #e5e7eb;
+            }
+
+    .col-time {
+        width: 140px;
+    }
+
+    .time-cell {
+        position: sticky;
+        left: 0;
+        z-index: 1;
+        background: #fff;
+        padding: .6rem;
+        vertical-align: top;
+        text-align: right;
+        border-right: 1px solid #e5e7eb;
+        border-left: 1px solid #e5e7eb;
+    }
+
+    table.schedule tbody td, table.schedule tbody th.time-cell {
+        border-right: 1px solid #e5e7eb;
+        border-bottom: 1px solid #e5e7eb;
+    }
+
+    table.schedule tbody tr:first-child td,
+    table.schedule tbody tr:first-child th.time-cell {
+        border-top: 1px solid #e5e7eb;
+    }
+
+    table.schedule tbody td:last-child {
+        border-right: 1px solid #e5e7eb;
+    }
+
+    .time-pill {
+        display: inline-block;
+        padding: .35rem .6rem;
+        border-radius: 999px;
+        background: #eef6ff;
+        color: #0f172a;
+        font-weight: 700;
+        font-size: .92rem;
+        border: 1px solid #dbe7ff;
+    }
+
+    .cell {
+        padding: .5rem;
+        min-height: 92px;
+        vertical-align: top;
+        overflow: hidden;
+    }
+
+    
+    .card {
+        position: relative;
+        box-sizing: border-box;
+        max-width: 100%;
+        border: 1px solid rgba(0,0,0,.06);
+        border-radius: 14px;
+        padding: 12px;
+        background: #fff;
+        box-shadow: 0 1px 0 rgba(16,24,40,.04);
+        overflow: hidden;
+    }
+        
+        .card, .card * {
+            word-break: break-word;
+            overflow-wrap: anywhere;
+            hyphens: auto;
+        }
+
+    .card-top {
+        display: flex;
+        justify-content: space-between;
+        gap: .5rem;
+        margin-bottom: .25rem;
+        font-size: .8rem;
+        color: #334155;
+    }
+
+    
+    .badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-weight: 700;
+        font-size: .78rem;
+        background: #eef2f7;
+        color: #111827;
+        border: 1px solid #e5e7eb;
+    }
+
+    .title {
+        font-weight: 800;
+        margin-bottom: .15rem;
+        line-height: 1.25;
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+
+    .sub {
+        color: #334155;
+    }
+
+    .meta {
+        color: #475569;
+        display: flex;
+        gap: .5rem;
+        flex-wrap: wrap;
+    }
+
+        .meta span {
+            display: block;
+            max-width: 100%;
+            white-space: normal;
+        }
+
+    .slot-mode {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        margin-left: 6px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: .72rem;
+        font-weight: 600;
+        background: #eef2ff;
+        color: #4338ca;
+    }
+
+    .lock {
+        opacity: .7;
+    }
+
+    
+    .lec {
+        background: #e9f3ff;
+    }
+
+    .sem {
+        background: #eafaf0;
+    }
+
+    .lab {
+        background: #fff7df;
+    }
+    
+    .prc {
+        background: #efe5ff;
+    }
+    
+    .brk {
+        background: #f1f5f9;
+        text-align: center;
+    }
+
+    .can {
+        background: #ffe9e9;
+        text-decoration: line-through;
+    }
+
+    
+    .res {
+        background: #e0f2fe;
+        border: 1px dashed #38bdf8;
+    }
+
+    
+    .week-nav {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        margin-top: 16px;
+        padding: 14px;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 16px;
+    }
+
+    .week-label {
+        color: #475569;
+        font-weight: 600;
+    }
+
+    .card-edit-trigger {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        width: 28px;
+        height: 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        border: 1px solid #dbe3f0;
+        background: rgba(255, 255, 255, 0.9);
+        color: #1f2937;
+        cursor: pointer;
+        transition: background .15s ease;
+    }
+
+    .card-edit-trigger:hover {
+        background: #f1f5f9;
+    }
+
+    .card-edit {
+        margin-top: .6rem;
+        padding: .5rem;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.85);
+        display: flex;
+        flex-direction: column;
+        gap: .5rem;
+        border: 1px dashed rgba(148, 163, 184, .5);
+    }
+
+    .card-edit-field {
+        display: flex;
+        flex-direction: column;
+        gap: .25rem;
+        font-size: .82rem;
+        color: #1f2937;
+    }
+
+    .card-edit-label {
+        font-size: .78rem;
+        color: #475569;
+    }
+
+    .card-edit-select {
+        padding: .4rem .5rem;
+        border-radius: 8px;
+        border: 1px solid #cbd5f5;
+        background: #fff;
+        font-size: .82rem;
+    }
+
+    .card-edit-actions {
+        display: flex;
+        gap: .4rem;
+        flex-wrap: wrap;
+    }
+
+    .card-edit-error {
+        color: #dc2626;
+        font-size: .78rem;
+    }
+
+    .btn-sm {
+        padding: .35rem .6rem;
+        font-size: .78rem;
+    }
+
+    .td-edit-icon {
+        font-size: .9rem;
+        line-height: 1;
+    }
+</style>

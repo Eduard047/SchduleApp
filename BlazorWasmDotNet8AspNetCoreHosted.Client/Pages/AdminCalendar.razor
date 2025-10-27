@@ -1,0 +1,207 @@
+@page "/admin/calendar"
+@using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
+@inject BlazorWasmDotNet8AspNetCoreHosted.Client.Services.IAdminApi Admin
+
+<PageTitle>Адмін • Календар</PageTitle>
+
+<h3 class="mb-3">Винятки календаря</h3>
+
+@if (!string.IsNullOrWhiteSpace(error))
+{
+    <div class="alert alert-danger">@error</div>
+}
+@if (!string.IsNullOrWhiteSpace(ok))
+{
+    <div class="alert alert-success">@ok</div>
+}
+
+<div class="card p-3 mb-3">
+    <div class="row g-2 align-items-end">
+        <div class="col-12 col-md-3">
+            <label class="form-label">Дата</label>
+            <InputText class="form-control" type="date" @bind-Value="form.Date" />
+        </div>
+        <div class="col-12 col-md-5">
+            <label class="form-label">Назва</label>
+            <InputText class="form-control" @bind-Value="form.Name" />
+        </div>
+        <div class="col-6 col-md-2">
+            <label class="form-label">Робочий?</label><br />
+            <input type="checkbox" class="form-check-input" @bind="form.IsWorkingDay" />
+        </div>
+        <div class="col-6 col-md-2 d-grid">
+            <button class="btn btn-primary" @onclick="Save">Зберегти</button>
+        </div>
+    </div>
+</div>
+
+<div class="card p-3">
+    <div class="d-flex justify-content-between align-items-center mb-2 gap-2">
+        <div class="text-muted small">Показано: @SortedAndFiltered.Count() з @items.Count</div>
+        <div class="input-group" style="max-width:320px;">
+            <span class="input-group-text">Пошук</span>
+            <input class="form-control" @bind="filter" @bind:event="oninput" placeholder="Id / дата / назва / так/ні" />
+        </div>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table table-sm align-middle">
+            <thead>
+                <tr>
+                    <th style="width:80px;" role="button" class="sortable-th"
+                        @onclick="() => ToggleSort(nameof(CalendarExceptionEditDto.Id))">
+                        Id @HeaderIcon(nameof(CalendarExceptionEditDto.Id))
+                    </th>
+                    <th role="button" class="sortable-th"
+                        @onclick="() => ToggleSort(nameof(CalendarExceptionEditDto.Date))">
+                        Дата @HeaderIcon(nameof(CalendarExceptionEditDto.Date))
+                    </th>
+                    <th role="button" class="sortable-th"
+                        @onclick="() => ToggleSort(nameof(CalendarExceptionEditDto.Name))">
+                        Назва @HeaderIcon(nameof(CalendarExceptionEditDto.Name))
+                    </th>
+                    <th role="button" class="sortable-th"
+                        @onclick="() => ToggleSort(nameof(CalendarExceptionEditDto.IsWorkingDay))">
+                        Робочий @HeaderIcon(nameof(CalendarExceptionEditDto.IsWorkingDay))
+                    </th>
+                    <th style="width:140px;"></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var x in SortedAndFiltered)
+                {
+                    <tr>
+                        <td>@x.Id</td>
+                        <td>@x.Date</td>
+                        <td>@x.Name</td>
+                        <td>@(x.IsWorkingDay ? "Так" : "Ні")</td>
+                        <td class="text-end">
+                            <button class="btn btn-sm btn-outline-primary me-2" @onclick="() => EditRow(x)">Редагувати</button>
+                            <button class="btn btn-sm btn-outline-danger" @onclick="() => Delete(x.Id!.Value)">Видалити</button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@code {
+    
+    private string? error, ok;
+
+    
+    private List<CalendarExceptionEditDto> items = new();
+
+    
+    private CalendarExceptionEditDto form = new()
+    {
+        Id = null,
+        Date = DateTime.Today.ToString("yyyy-MM-dd"),
+        Name = "",
+        IsWorkingDay = false
+    };
+
+    
+    private string sortField = nameof(CalendarExceptionEditDto.Date);
+    private bool sortAsc = true;
+    private string? filter;
+
+    
+    protected override async Task OnInitializedAsync() => await Load();
+
+    private async Task Load()
+    {
+        try
+        {
+            error = ok = null;
+            items = await Admin.GetCalendar();
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    
+    private void EditRow(CalendarExceptionEditDto x)
+        => form = new() { Id = x.Id, Date = x.Date, IsWorkingDay = x.IsWorkingDay, Name = x.Name };
+
+    
+    private async Task Save()
+    {
+        try
+        {
+            await Admin.UpsertCalendar(form);
+            await Load();
+            ok = "Збережено.";
+            form = new() { Id = null, Date = DateTime.Today.ToString("yyyy-MM-dd"), Name = "", IsWorkingDay = false };
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    
+    private async Task Delete(int id)
+    {
+        try
+        {
+            await Admin.DeleteCalendar(id);
+            await Load();
+            ok = "Видалено.";
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    
+    private static DateOnly DO(string? s)
+        => DateOnly.TryParse(s, out var d) ? d : DateOnly.MinValue;
+
+    
+    private IEnumerable<CalendarExceptionEditDto> ApplyFilter(IEnumerable<CalendarExceptionEditDto> seq)
+    {
+        if (string.IsNullOrWhiteSpace(filter)) return seq;
+        var f = filter.Trim();
+
+        return seq.Where(x =>
+            (x.Id?.ToString().Contains(f, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (x.Date?.Contains(f, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (x.Name?.Contains(f, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            
+            ((f.Equals("так", StringComparison.OrdinalIgnoreCase) && x.IsWorkingDay) ||
+             (f.Equals("ні", StringComparison.OrdinalIgnoreCase) && !x.IsWorkingDay)))
+        ;
+    }
+
+    
+    private IEnumerable<CalendarExceptionEditDto> ApplySort(IEnumerable<CalendarExceptionEditDto> seq)
+    {
+        return (sortField, sortAsc) switch
+        {
+            (nameof(CalendarExceptionEditDto.Id), true) => seq.OrderBy(x => x.Id ?? 0),
+            (nameof(CalendarExceptionEditDto.Id), false) => seq.OrderByDescending(x => x.Id ?? 0),
+
+            (nameof(CalendarExceptionEditDto.Date), true) => seq.OrderBy(x => DO(x.Date)),
+            (nameof(CalendarExceptionEditDto.Date), false) => seq.OrderByDescending(x => DO(x.Date)),
+
+            (nameof(CalendarExceptionEditDto.Name), true) => seq.OrderBy(x => x.Name),
+            (nameof(CalendarExceptionEditDto.Name), false) => seq.OrderByDescending(x => x.Name),
+
+            (nameof(CalendarExceptionEditDto.IsWorkingDay), true) => seq.OrderBy(x => x.IsWorkingDay),
+            (nameof(CalendarExceptionEditDto.IsWorkingDay), false) => seq.OrderByDescending(x => x.IsWorkingDay),
+
+            _ => seq
+        };
+    }
+
+    
+    private IEnumerable<CalendarExceptionEditDto> SortedAndFiltered
+        => ApplySort(ApplyFilter(items));
+
+    
+    private void ToggleSort(string field)
+    {
+        if (sortField == field) sortAsc = !sortAsc;
+        else { sortField = field; sortAsc = true; }
+    }
+
+    
+    private MarkupString HeaderIcon(string field)
+        => new(sortField == field ? $"<span class=\"ms-1\">{(sortAsc ? "▲" : "▼")}</span>" : "");
+}

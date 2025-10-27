@@ -1,0 +1,42 @@
+@using Microsoft.AspNetCore.Components.Routing
+
+<nav class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm sticky-top">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="/schedule"></a>
+
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#topNav"
+                aria-controls="topNav" aria-expanded="false" aria-label="Toggle navigation">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+
+        <div class="collapse navbar-collapse" id="topNav">
+            <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+                <li class="nav-item">
+                    <NavLink class="nav-link" href="/schedule" Match="NavLinkMatch.Prefix">Розклад</NavLink>
+                </li>
+                <li class="nav-item">
+                    <NavLink class="nav-link" href="/teacher-drafts" Match="NavLinkMatch.Prefix">Графік викладачів</NavLink>
+                </li>
+                <li class="nav-item">
+                    <NavLink class="nav-link" href="/admin/schedule" Match="NavLinkMatch.Prefix">Редактор розкладу</NavLink>
+                </li>
+                <li class="nav-item dropdown">
+                    <a class="nav-link dropdown-toggle" role="button" data-bs-toggle="dropdown">Адмін</a>
+                    <ul class="dropdown-menu">
+                        <li><NavLink class="dropdown-item" href="/admin/courses">Курси</NavLink></li>
+                        <li><NavLink class="dropdown-item" href="/admin/lunch">Обід</NavLink></li>
+                        <li><NavLink class="dropdown-item" href="/admin/calendar">Календар</NavLink></li>
+                        <li><NavLink class="dropdown-item" href="/admin/groups">Групи</NavLink></li>
+                        <li><NavLink class="dropdown-item" href="/admin/modules">Модулі</NavLink></li>
+                        <li><NavLink class="dropdown-item" href="/admin/teachers">Викладачі</NavLink></li>
+                        <li><NavLink class="dropdown-item" href="/admin/rooms">Аудиторії</NavLink></li>
+                        <li><NavLink class="dropdown-item" href="/admin/buildings">Корпуси</NavLink></li>
+                        <li><NavLink class="dropdown-item" href="/admin/lesson-types">Типи занять</NavLink></li>
+                        <li><NavLink class="dropdown-item" href="/admin/time-slots">Слоти часу</NavLink></li>
+                        <li><NavLink class="dropdown-item" href="/admin/module-sequence">Послідовності</NavLink></li>
+                    </ul>
+                </li>
+            </ul>
+        </div>
+    </div>
+</nav>

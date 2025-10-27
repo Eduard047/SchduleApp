@@ -1,0 +1,17 @@
+# Build outputs
+bin/
+obj/
+
+# User-specific files
+*.user
+*.suo
+*.userprefs
+
+# VS Code
+.vscode/
+
+# ASP.NET generated
+wwwroot/dist/
+
+# Others
+*.swp

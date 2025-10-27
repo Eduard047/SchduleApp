@@ -1,0 +1,200 @@
+@page "/admin/rooms"
+@using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
+@inject BlazorWasmDotNet8AspNetCoreHosted.Client.Services.IAdminApi Admin
+
+<PageTitle>Адмін • Аудиторії</PageTitle>
+
+<h3 class="mb-3">Аудиторії</h3>
+
+@if (!string.IsNullOrWhiteSpace(error))
+{
+    <div class="alert alert-danger">@error</div>
+}
+@if (!string.IsNullOrWhiteSpace(ok))
+{
+    <div class="alert alert-success">@ok</div>
+}
+
+<div class="card p-3 mb-3">
+    <div class="row g-2">
+        <div class="col-12 col-md-4">
+            <label class="form-label">Назва</label>
+            <input class="form-control" @bind="form.Name" />
+        </div>
+        <div class="col-6 col-md-2">
+            <label class="form-label">Місткість</label>
+            <input type="number" min="0" class="form-control" @bind="form.Capacity" />
+        </div>
+        <div class="col-12 col-md-3">
+            <label class="form-label">Корпус</label>
+            <select class="form-select" @bind="form.BuildingId">
+                <option value="0">— Оберіть —</option>
+                @foreach (var b in buildings)
+                {
+                    <option value="@b.Id">@b.Name</option>
+                }
+            </select>
+        </div>
+        <div class="col-12 d-grid">
+            <button class="btn btn-primary" @onclick="Save">Зберегти</button>
+        </div>
+    </div>
+</div>
+
+<div class="card p-3">
+    <div class="d-flex justify-content-between align-items-center mb-2 gap-2">
+        
+        <div class="input-group" style="max-width:360px;">
+            <span class="input-group-text">Пошук</span>
+            <input class="form-control" @bind="filter" @bind:event="oninput" placeholder="Id / назва / місткість / корпус" />
+        </div>
+
+        <div class="small text-muted">Показано: @SortedAndFiltered.Count() з @items.Count</div>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table table-sm align-middle">
+            <thead>
+                <tr>
+                    <th style="width:80px;" class="sortable-th" role="button"
+                        @onclick="() => ToggleSort(nameof(RoomEditDto.Id))">
+                        Id @HeaderIcon(nameof(RoomEditDto.Id))
+                    </th>
+                    <th class="sortable-th" role="button"
+                        @onclick="() => ToggleSort(nameof(RoomEditDto.Name))">
+                        Назва @HeaderIcon(nameof(RoomEditDto.Name))
+                    </th>
+                    <th class="sortable-th" role="button"
+                        @onclick="() => ToggleSort(nameof(RoomEditDto.Capacity))">
+                        Місткість @HeaderIcon(nameof(RoomEditDto.Capacity))
+                    </th>
+                    <th class="sortable-th" role="button"
+                        @onclick="() => ToggleSort(BuildingField)">
+                        Корпус @HeaderIcon(BuildingField)
+                    </th>
+                    <th style="width:140px;"></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in SortedAndFiltered)
+                {
+                    <tr>
+                        <td>@r.Id</td>
+                        <td>@r.Name</td>
+                        <td>@r.Capacity</td>
+                        <td>@NameOf(buildings, r.BuildingId)</td>
+                        <td class="text-end">
+                            <button class="btn btn-sm btn-outline-primary me-2" @onclick="() => form = new(r.Id, r.Name, r.Capacity, r.BuildingId)">Редагувати</button>
+                            <button class="btn btn-sm btn-outline-danger" @onclick="() => Delete(r.Id!.Value)">Видалити</button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@code {
+    
+    private string? error, ok;
+    private List<RoomEditDto> items = new();
+    private RoomEditDto form = new() { Id = null, Name = "", Capacity = 0, BuildingId = 0 };
+    private List<BuildingEditDto> buildings = new();
+
+    
+    private const string BuildingField = "Building";
+    private string sortField = nameof(RoomEditDto.Name);
+    private bool sortAsc = true;
+
+    
+    private string? filter;
+
+    protected override async Task OnInitializedAsync() => await Load();
+
+    private async Task Load()
+    {
+        try
+        {
+            error = ok = null;
+            items = await Admin.GetRooms();
+            buildings = await Admin.GetBuildings();
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    
+    private static string NameOf(IEnumerable<BuildingEditDto> list, int id)
+        => list.FirstOrDefault(x => x.Id == id)?.Name ?? $"#{id}";
+
+    
+    private async Task Save()
+    {
+        try
+        {
+            await Admin.UpsertRoom(form);
+            await Load();
+            ok = "Збережено.";
+            form = new() { Id = null, Name = "", Capacity = 0, BuildingId = 0 };
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private async Task Delete(int id)
+    {
+        try
+        {
+            await Admin.DeleteRoom(id);
+            await Load();
+            ok = "Видалено.";
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    
+    private IEnumerable<RoomEditDto> ApplyFilter(IEnumerable<RoomEditDto> seq)
+    {
+        if (string.IsNullOrWhiteSpace(filter)) return seq;
+        var f = filter.Trim();
+
+        return seq.Where(r =>
+            r.Id?.ToString().Contains(f, StringComparison.OrdinalIgnoreCase) == true ||
+            (r.Name?.Contains(f, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            r.Capacity.ToString().Contains(f, StringComparison.OrdinalIgnoreCase) ||
+            NameOf(buildings, r.BuildingId).Contains(f, StringComparison.OrdinalIgnoreCase)
+        );
+    }
+
+    
+    private IEnumerable<RoomEditDto> ApplySort(IEnumerable<RoomEditDto> seq)
+    {
+        return (sortField, sortAsc) switch
+        {
+            (nameof(RoomEditDto.Id), true) => seq.OrderBy(x => x.Id),
+            (nameof(RoomEditDto.Id), false) => seq.OrderByDescending(x => x.Id),
+
+            (nameof(RoomEditDto.Name), true) => seq.OrderBy(x => x.Name),
+            (nameof(RoomEditDto.Name), false) => seq.OrderByDescending(x => x.Name),
+
+            (nameof(RoomEditDto.Capacity), true) => seq.OrderBy(x => x.Capacity),
+            (nameof(RoomEditDto.Capacity), false) => seq.OrderByDescending(x => x.Capacity),
+
+            (BuildingField, true) => seq.OrderBy(x => NameOf(buildings, x.BuildingId)).ThenBy(x => x.Name),
+            (BuildingField, false) => seq.OrderByDescending(x => NameOf(buildings, x.BuildingId)).ThenByDescending(x => x.Name),
+
+            _ => seq
+        };
+    }
+
+    
+    private IEnumerable<RoomEditDto> SortedAndFiltered => ApplySort(ApplyFilter(items));
+
+    
+    private void ToggleSort(string field)
+    {
+        if (sortField == field) sortAsc = !sortAsc;
+        else { sortField = field; sortAsc = true; }
+    }
+
+    private MarkupString HeaderIcon(string field)
+        => new(sortField == field ? $"<span class=\"ms-1\">{(sortAsc ? "▲" : "▼")}</span>" : "");
+}

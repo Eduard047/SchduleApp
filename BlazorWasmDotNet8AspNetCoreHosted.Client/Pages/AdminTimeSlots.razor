@@ -1,0 +1,175 @@
+@page "/admin/time-slots"
+@using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
+@inject HttpClient Http
+@inject BlazorWasmDotNet8AspNetCoreHosted.Client.Services.TimeSlotsApi Api
+
+<h3>Слоти часу</h3>
+
+<div class="mb-3">
+    <label class="form-label">Уровень</label>
+    <div class="d-flex gap-2">
+        <select class="form-select" style="max-width: 280px" @bind="_scope">
+            <option value="Global">Глобально (для всіх курсів)</option>
+            <option value="Course">Тільки для обраного курсу</option>
+        </select>
+
+        @if (_scope == Scope.Course)
+        {
+            <select class="form-select" style="max-width: 360px" @bind="_courseId">
+                <option value="">— оберіть курс —</option>
+                @foreach (var c in _courses)
+                {
+                    <option value="@c.Id">@c.Name</option>
+                }
+            </select>
+        }
+
+        <button class="btn btn-outline-secondary" @onclick="LoadRaw">Завантажити</button>
+        <button class="btn btn-outline-info" @onclick="LoadEffective" title="Показати ефективні (курсові(якщо є), інакше глобальні)">
+            Показати ефективні
+        </button>
+    </div>
+</div>
+
+@if (_error is not null)
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+<div class="card">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <div class="form-text">
+                Слоти використовуються автогенерацією 1-в-1. Перекритя недопустимі. Час вводиться у форматі <code>HH:mm</code>.
+            </div>
+            <div>
+                <button class="btn btn-sm btn-outline-primary me-2" @onclick="AddRow">Додати слот</button>
+                <button class="btn btn-sm btn-primary" @onclick="Save">Зберегти</button>
+            </div>
+        </div>
+
+        <table class="table table-sm align-middle">
+            <thead>
+                <tr>
+                    <th style="width:90px">№</th>
+                    <th style="width:140px">Старт</th>
+                    <th style="width:140px">Фініш</th>
+                    <th style="width:140px">Активен</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (_rows.Count == 0)
+                {
+                    <tr><td colspan="5" class="text-muted">Немає слотів</td></tr>
+                }
+                else
+                {
+                    @foreach (var r in _rows.OrderBy(x => x.SortOrder).ThenBy(x => x.Start))
+                    {
+                        <tr>
+                            <td>
+                                <input class="form-control form-control-sm" style="width:90px"
+                                       type="number" min="0" @bind="r.SortOrder" />
+                            </td>
+                            <td>
+                                <input class="form-control form-control-sm" style="width:120px"
+                                       placeholder="08:30" @bind="r.Start" />
+                            </td>
+                            <td>
+                                <input class="form-control form-control-sm" style="width:120px"
+                                       placeholder="10:00" @bind="r.End" />
+                            </td>
+                            <td>
+                                <input class="form-check-input" type="checkbox" @bind="r.IsActive" />
+                            </td>
+                            <td class="text-end">
+                                <button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveRow(r)">Видалити</button>
+                            </td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+
+        <div class="form-text">
+            Порада: Тримай тривалості однаковими (наприклад, 90 хвилин), тоді обід краще задавати окремим слотом (наприклад 12:00–13:00),
+            щоб він займав місце пари автоматично.
+        </div>
+    </div>
+</div>
+
+@code {
+    enum Scope { Global, Course }
+
+    private Scope _scope = Scope.Global;
+    private int? _courseId;
+    private List<LookupDto> _courses = new();
+    private List<TimeSlotDto> _rows = new();
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        
+        var meta = await Http.GetFromJsonAsync<MetaResponseDto>("api/meta");
+        _courses = meta?.Courses ?? new();
+    }
+
+    private async Task LoadRaw()
+    {
+        _error = null;
+        if (_scope == Scope.Course && _courseId is null) { _error = "Вибери курс."; return; }
+        _rows = await Api.GetRawAsync(_scope == Scope.Global ? null : _courseId);
+    }
+
+    private async Task LoadEffective()
+    {
+        _error = null;
+        if (_scope == Scope.Course && _courseId is null) { _error = "Вибери курс."; return; }
+        _rows = await Api.GetEffectiveAsync(_scope == Scope.Global ? null : _courseId);
+    }
+
+    private void AddRow()
+    {
+        var maxOrder = _rows.Count == 0 ? 1 : _rows.Max(x => x.SortOrder) + 1;
+        _rows.Add(new TimeSlotDto { Id = 0, CourseId = _scope == Scope.Global ? null : _courseId, SortOrder = maxOrder, Start = "08:30", End = "10:00", IsActive = true });
+    }
+
+    private void RemoveRow(TimeSlotDto r) => _rows.Remove(r);
+
+    private static bool TryTime(string s, out TimeOnly t) => TimeOnly.TryParseExact(s, "HH:mm", out t);
+
+    private string? Validate()
+    {
+        
+        foreach (var r in _rows)
+        {
+            if (!TryTime(r.Start, out var s) || !TryTime(r.End, out var e))
+                return $"Невірний час у рядку з порядком {r.SortOrder}. Формат HH:mm";
+            if (s >= e) return $"Старт >= фініш у рядку {r.SortOrder}.";
+        }
+
+        
+        var actives = _rows.Where(x => x.IsActive).ToList();
+        for (int i = 0; i < actives.Count; i++)
+            for (int j = i + 1; j < actives.Count; j++)
+            {
+                var a = actives[i]; var b = actives[j];
+                TryTime(a.Start, out var as1); TryTime(a.End, out var ae1);
+                TryTime(b.Start, out var bs1); TryTime(b.End, out var be1);
+                var overlap = as1 < be1 && bs1 < ae1;
+                if (overlap) return $"Перекриття між слотами {a.SortOrder} і {b.SortOrder}.";
+            }
+
+        return null;
+    }
+
+    private async Task Save()
+    {
+        _error = Validate();
+        if (_error is not null) return;
+        await Api.SaveAsync(_scope == Scope.Global ? null : _courseId, _rows);
+        
+        await LoadRaw();
+    }
+}

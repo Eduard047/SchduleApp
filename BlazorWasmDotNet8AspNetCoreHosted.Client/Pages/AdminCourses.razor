@@ -1,0 +1,208 @@
+@page "/admin/courses"
+@using BlazorWasmDotNet8AspNetCoreHosted.Client.Services
+@using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
+@inject IAdminApi Api
+@inject IJSRuntime JS
+
+<h3 class="mb-3">Курси</h3>
+
+@if (!string.IsNullOrEmpty(error))
+{
+    <div class="alert alert-danger">@error</div>
+}
+@if (!string.IsNullOrEmpty(ok))
+{
+    <div class="alert alert-success">@ok</div>
+}
+
+<div class="row">
+    <div class="col-md-6">
+
+        <div class="d-flex justify-content-between align-items-center mb-2 gap-2">
+            <button class="btn btn-primary" @onclick="New">+ Додати курс</button>
+
+            <div class="input-group" style="max-width:280px;">
+                <span class="input-group-text">Пошук</span>
+                <input class="form-control" @bind="filter" @bind:event="oninput" placeholder="Id / назва / тижні" />
+            </div>
+        </div>
+
+        <table class="table table-sm table-striped align-middle">
+            <thead>
+                <tr>
+                    <th role="button" class="sortable-th" @onclick="() => ToggleSort(nameof(CourseEditDto.Id))">
+                        Id @HeaderIcon(nameof(CourseEditDto.Id))
+                    </th>
+                    <th role="button" class="sortable-th" @onclick="() => ToggleSort(nameof(CourseEditDto.Name))">
+                        Назва @HeaderIcon(nameof(CourseEditDto.Name))
+                    </th>
+                    <th role="button" class="sortable-th" @onclick="() => ToggleSort(nameof(CourseEditDto.DurationWeeks))">
+                        Тривалість (тижнів) @HeaderIcon(nameof(CourseEditDto.DurationWeeks))
+                    </th>
+                    <th style="width:180px;"></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var c in SortedAndFilteredItems)
+                {
+                    <tr>
+                        <td>@c.Id</td>
+                        <td>@c.Name</td>
+                        <td>@c.DurationWeeks</td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-secondary me-2" @onclick="() => Edit(c)">Редагувати</button>
+                            <button class="btn btn-sm btn-outline-danger" @onclick="() => Delete(c.Id!.Value)">Видалити</button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        <div class="text-muted small">
+            Показано: @SortedAndFilteredItems.Count() з @items.Count
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <EditForm Model="model" OnValidSubmit="Save">
+            <DataAnnotationsValidator />
+            <div class="card">
+                <div class="card-header">@formTitle</div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">Назва</label>
+                        <InputText class="form-control" @bind-Value="model.Name" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Тривалість (тижнів)</label>
+                        <InputNumber class="form-control" @bind-Value="model.DurationWeeks" />
+                    </div>
+                </div>
+                <div class="card-footer d-flex gap-2">
+                    <button class="btn btn-success" type="submit">Зберегти</button>
+                    <button class="btn btn-secondary" type="button" @onclick="Cancel">Скасувати</button>
+                </div>
+            </div>
+        </EditForm>
+    </div>
+</div>
+
+@code
+{
+    private List<CourseEditDto> items = new();
+    private CourseEditDto model = new();
+    private string? error, ok;
+    private string formTitle = "Новий курс";
+    
+    private string sortField = nameof(CourseEditDto.Name);
+    private bool sortAsc = true;
+    private string? filter;
+
+    private IEnumerable<CourseEditDto> SortedAndFilteredItems
+        => ApplySort(ApplyFilter(items));
+
+    private IEnumerable<CourseEditDto> ApplyFilter(IEnumerable<CourseEditDto> seq)
+    {
+        if (string.IsNullOrWhiteSpace(filter)) return seq;
+
+        var f = filter.Trim();
+        return seq.Where(c =>
+            (c.Id?.ToString().Contains(f, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (!string.IsNullOrEmpty(c.Name) && c.Name.Contains(f, StringComparison.OrdinalIgnoreCase)) ||
+            c.DurationWeeks.ToString().Contains(f, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private IEnumerable<CourseEditDto> ApplySort(IEnumerable<CourseEditDto> seq)
+    {
+        return (sortField, sortAsc) switch
+        {
+            (nameof(CourseEditDto.Id), true) => seq.OrderBy(c => c.Id ?? 0),
+            (nameof(CourseEditDto.Id), false) => seq.OrderByDescending(c => c.Id ?? 0),
+
+            (nameof(CourseEditDto.DurationWeeks), true) => seq.OrderBy(c => c.DurationWeeks),
+            (nameof(CourseEditDto.DurationWeeks), false) => seq.OrderByDescending(c => c.DurationWeeks),
+
+            (nameof(CourseEditDto.Name), false) => seq.OrderByDescending(c => c.Name),
+            _ => seq.OrderBy(c => c.Name)
+        };
+    }
+
+    private void ToggleSort(string field)
+    {
+        if (sortField == field) sortAsc = !sortAsc;
+        else { sortField = field; sortAsc = true; }
+    }
+
+    private MarkupString HeaderIcon(string field)
+        => new MarkupString(sortField == field ? $"<span class=\"ms-1\">{(sortAsc ? "▲" : "▼")}</span>" : "");
+
+    
+    protected override async Task OnInitializedAsync() => await Load();
+
+    private async Task Load()
+    {
+        error = ok = null;
+        items = await Api.GetCourses();
+        if (!items.Any())
+        {
+            model = new CourseEditDto(null, "", 16);
+            formTitle = "Новий курс";
+        }
+        StateHasChanged();
+    }
+
+    private void New()
+    {
+        error = ok = null;
+        model = new CourseEditDto(null, "", 16);
+        formTitle = "Новий курс";
+    }
+
+    private void Edit(CourseEditDto c)
+    {
+        error = ok = null;
+        model = new CourseEditDto(c.Id, c.Name, c.DurationWeeks);
+        formTitle = $"Редагування: {c.Name}";
+    }
+
+    private async Task Save()
+    {
+        error = ok = null;
+        try
+        {
+            await Api.UpsertCourse(model);
+            ok = "Збережено.";
+            await Load();
+            New();
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private void Cancel() => New();
+
+    private async Task Delete(int id)
+    {
+        error = ok = null;
+        try
+        {
+            try
+            {
+                await Api.DeleteCourse(id);
+                await Load();
+                ok = "Видалено.";
+                return;
+            }
+            catch (HttpRequestException ex) when ((int?)ex.StatusCode == 409 || ex.Message.Contains("409"))
+            {
+                var sure = await JS.InvokeAsync<bool>("confirm",
+                    "Курс використовується. Видалити разом із пов’язаними групами, модулями та заняттями?");
+                if (!sure) { error = "Скасовано користувачем."; return; }
+
+                await Api.DeleteCourse(id, force: true);
+                await Load();
+                ok = "Курс і пов’язані дані видалено.";
+            }
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+}

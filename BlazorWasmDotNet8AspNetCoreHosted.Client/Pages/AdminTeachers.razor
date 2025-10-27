@@ -1,0 +1,425 @@
+@page "/admin/teachers"
+@using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
+@inject HttpClient Http
+
+<h3>Викладачі</h3>
+
+@if (loading)
+{
+    <p>Завантаження…</p>
+}
+else
+{
+    <div class="d-flex justify-content-between align-items-center mb-2 gap-2">
+        <button class="btn btn-primary" @onclick="CreateNew">Додати викладача</button>
+
+        <div class="input-group" style="max-width:360px;">
+            <span class="input-group-text">Пошук</span>
+            <input class="form-control" @bind="filter" @bind:event="oninput" placeholder="Id / ПІБ / ступінь / звання / модуль" />
+        </div>
+    </div>
+
+    <div class="small text-muted mb-2">Показано: @SortedAndFiltered.Count() з @list.Count</div>
+
+    <table class="table table-sm">
+        <thead>
+            <tr>
+                <th class="sortable-th" style="width:80px;" role="button"
+                    @onclick="() => ToggleSort(nameof(TeacherViewDto.Id))">
+                    # @HeaderIcon(nameof(TeacherViewDto.Id))
+                </th>
+                <th class="sortable-th" role="button"
+                    @onclick="() => ToggleSort(nameof(TeacherViewDto.FullName))">
+                    ПІБ @HeaderIcon(nameof(TeacherViewDto.FullName))
+                </th>
+                <th class="sortable-th" role="button"
+                    @onclick="() => ToggleSort(nameof(TeacherViewDto.ScientificDegree))">
+                    Науковий ступінь @HeaderIcon(nameof(TeacherViewDto.ScientificDegree))
+                </th>
+                <th class="sortable-th" role="button"
+                    @onclick="() => ToggleSort(nameof(TeacherViewDto.AcademicTitle))">
+                    Наукове звання @HeaderIcon(nameof(TeacherViewDto.AcademicTitle))
+                </th>
+                <th class="sortable-th" role="button"
+                    @onclick="() => ToggleSort(ModulesField)">
+                    Модулі @HeaderIcon(ModulesField)
+                </th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var t in SortedAndFiltered)
+            {
+                <tr>
+                    <td>@t.Id</td>
+                    <td>@t.FullName</td>
+                    <td>@t.ScientificDegree</td>
+                    <td>@t.AcademicTitle</td>
+                    <td>@ModulesCaption(t)</td>
+                    <td class="text-end">
+                        <button class="btn btn-sm btn-secondary me-1" @onclick="() => Edit(t.Id)">Редагувати</button>
+                        <button class="btn btn-sm btn-danger" @onclick="() => Delete(t.Id)">Видалити</button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@if (edit != null)
+{
+    <hr />
+    <h4>@(edit.Id is null ? "Створення викладача" : $"Редагування #{edit.Id}")</h4>
+
+    <div class="row g-3">
+        <div class="col-md-6">
+            <label class="form-label">ПІБ</label>
+            <input class="form-control" @bind="edit.FullName" />
+        </div>
+
+        <div class="col-md-3">
+            <label class="form-label">Науковий ступінь</label>
+            <input class="form-control" @bind="edit.ScientificDegree" />
+        </div>
+
+        <div class="col-md-3">
+            <label class="form-label">Наукове звання</label>
+            <input class="form-control" @bind="edit.AcademicTitle" />
+        </div>
+
+        <div class="col-md-12">
+            <label class="form-label">Допустимі модулі</label>
+            <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-2">
+                @foreach (var m in meta.Modules)
+                {
+                    var checkedFlag = edit.ModuleIds.Contains(m.Id);
+                    var checkboxId = $"teacher_module_{m.Id}";
+                    <div class="col">
+                        <div class="form-check align-items-start">
+                            <input type="checkbox"
+                                   class="form-check-input"
+                                   id="@checkboxId"
+                                   checked="@checkedFlag"
+                                   @onchange="e => ToggleModule(m.Id, AsBool(e.Value))" />
+                            <label class="form-check-label ms-2" for="@checkboxId">
+                                <span class="d-block fw-semibold">@m.Name</span>
+                                <span class="d-block text-muted small">@m.CourseName</span>
+                            </label>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <div class="col-md-12">
+            <h5>Навантаження по курсам</h5>
+            <table class="table table-sm">
+                <thead>
+                    <tr>
+                        <th>Курс</th>
+                        <th style="width:220px">Цільові години / Заплановано</th>
+                        <th style="width:120px">Активне</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var c in meta.Courses)
+                    {
+                        var row = GetLoad(c.Id);
+                        <tr>
+                            <td>@c.Name</td>
+                            <td>
+                                <div class="input-group input-group-sm">
+                                    <input class="form-control" type="number"
+                                           value="@row.TargetHours"
+                                           @onchange="e => UpdateLoadHours(c.Id, e.Value?.ToString())" />
+                                    <span class="input-group-text">@row.ScheduledHours</span>
+                                </div>
+                                @if (row.ScheduledHours > row.TargetHours)
+                                {
+                                    <div class="form-text text-danger">
+                                        Перевищено на @(row.ScheduledHours - row.TargetHours)
+                                    </div>
+                                }
+                            </td>
+                            <td>
+                                <input type="checkbox" class="form-check-input"
+                                       checked="@row.IsActive"
+                                       @onchange="e => UpdateLoadActive(c.Id, AsBool(e.Value))" />
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        <div class="col-md-12">
+            <h5>Робочі вікна</h5>
+            <div class="row row-cols-1 row-cols-md-3 g-2">
+                @for (int uiDay = 0; uiDay < 7; uiDay++)
+                {
+                    var serverDay = (uiDay + 1) % 7; 
+                    var row = edit.WorkingHours.FirstOrDefault(x => x.DayOfWeek == serverDay);
+                    bool enabled = row is not null;
+                    string start = row?.Start ?? "09:00";
+                    string end = row?.End ?? "17:00";
+
+                    <div class="col">
+                        <div class="card p-2">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div class="fw-semibold">@DayName(uiDay)</div>
+                                <div class="form-check">
+                                    <input type="checkbox" class="form-check-input"
+                                           checked="@enabled"
+                                           @onchange="e => ToggleDay(serverDay, AsBool(e.Value))" />
+                                    <label class="form-check-label">Працює</label>
+                                </div>
+                            </div>
+                            <div class="d-flex align-items-center gap-2 mt-1">
+                                <input class="form-control form-control-sm" type="time" value="@start"
+                                       disabled="@(!enabled)"
+                                       @onchange="e => SetWhStart(serverDay, e.Value?.ToString())" />
+                                <span>—</span>
+                                <input class="form-control form-control-sm" type="time" value="@end"
+                                       disabled="@(!enabled)"
+                                       @onchange="e => SetWhEnd(serverDay, e.Value?.ToString())" />
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <div class="col-12 d-flex gap-2">
+            <button class="btn btn-success" @onclick="Save">Зберегти</button>
+            <button class="btn btn-outline-secondary" @onclick="Cancel">Скасувати</button>
+        </div>
+    </div>
+}
+
+@code {
+    
+    private MetaResponseDto meta = new(new(), new(), new(), new(), new(), new(), new());
+
+    
+    private List<TeacherViewDto> list = new();
+    private TeacherEditDto? edit;
+
+    
+    private bool loading = true;
+
+    
+    private const string ModulesField = "ModulesCount";
+    private string sortField = nameof(TeacherViewDto.FullName);
+    private bool sortAsc = true;
+
+    
+    private string? filter;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadMeta();
+        await LoadList();
+        loading = false;
+    }
+
+    private async Task LoadMeta()
+    {
+        meta = await Http.GetFromJsonAsync<MetaResponseDto>("api/meta") ?? meta;
+    }
+
+    private async Task LoadList()
+    {
+        list = await Http.GetFromJsonAsync<List<TeacherViewDto>>("api/admin/teachers") ?? new();
+    }
+
+    private async Task Edit(int id)
+    {
+        edit = await Http.GetFromJsonAsync<TeacherEditDto>($"api/admin/teachers/{id}");
+    }
+
+    private void CreateNew()
+    {
+        edit = new TeacherEditDto(
+            null,
+            "",
+            null,   
+            null,   
+            new List<int>(),
+            new List<TeacherLoadDto>(),
+            new List<TeacherWorkingHourDto>()
+        );
+    }
+
+    private async Task Save()
+    {
+        if (edit is null) return;
+        var resp = await Http.PostAsJsonAsync("api/admin/teachers/upsert", edit);
+        if (resp.IsSuccessStatusCode)
+        {
+            edit = null;
+            await LoadList();
+            StateHasChanged();
+        }
+        else
+        {
+            var msg = await resp.Content.ReadAsStringAsync();
+            Console.Error.WriteLine(msg);
+        }
+    }
+
+    private async Task Delete(int id)
+    {
+        var resp = await Http.DeleteAsync($"api/admin/teachers/{id}");
+        if (resp.IsSuccessStatusCode)
+            await LoadList();
+    }
+
+    private void Cancel() => edit = null;
+
+    private static bool AsBool(object? v) => v is bool b ? b : bool.TryParse(v?.ToString(), out var bb) && bb;
+
+    private string ModuleCaption(int id)
+    {
+        var module = meta.Modules.FirstOrDefault(m => m.Id == id);
+        if (module is null) return id.ToString();
+        var course = string.IsNullOrWhiteSpace(module.CourseName) ? null : module.CourseName;
+        return course is null ? module.Name : $"{module.Name} ({course})";
+    }
+
+    private string ModulesCaption(TeacherViewDto t) => string.Join(", ", t.ModuleIds.Select(ModuleCaption));
+
+    private void ToggleModule(int moduleId, bool isChecked)
+    {
+        if (edit is null) return;
+        if (isChecked)
+        {
+            if (!edit.ModuleIds.Contains(moduleId))
+                edit.ModuleIds.Add(moduleId);
+        }
+        else
+        {
+            edit.ModuleIds.RemoveAll(x => x == moduleId);
+        }
+    }
+
+    
+    private TeacherLoadDto GetLoad(int courseId)
+    {
+        if (edit is null) return new TeacherLoadDto(courseId, 0, false, 0);
+        var row = edit.Loads.FirstOrDefault(l => l.CourseId == courseId);
+        if (row is null)
+        {
+            row = new TeacherLoadDto(courseId, 0, false, 0);
+            edit.Loads.Add(row);
+        }
+        return row;
+    }
+
+    private void UpdateLoadHours(int courseId, string? val)
+    {
+        if (edit is null) return;
+        var row = GetLoad(courseId);
+        if (int.TryParse(val, out var n)) row.TargetHours = n;
+    }
+
+    private void UpdateLoadActive(int courseId, bool active)
+    {
+        if (edit is null) return;
+        var row = GetLoad(courseId);
+        row.IsActive = active;
+    }
+
+    
+    private void ToggleDay(int serverDay, bool enable)
+    {
+        if (edit is null) return;
+        if (enable)
+        {
+            if (!edit.WorkingHours.Any(x => x.DayOfWeek == serverDay))
+                edit.WorkingHours.Add(new TeacherWorkingHourDto(serverDay, "09:00", "17:00"));
+        }
+        else
+        {
+            edit.WorkingHours.RemoveAll(x => x.DayOfWeek == serverDay);
+        }
+    }
+
+    private void SetWhStart(int serverDay, string? val)
+    {
+        if (edit is null) return;
+        var row = edit.WorkingHours.FirstOrDefault(x => x.DayOfWeek == serverDay);
+        if (row is null)
+        {
+            row = new TeacherWorkingHourDto(serverDay, val ?? "09:00", "17:00");
+            edit.WorkingHours.Add(row);
+        }
+        else row.Start = val ?? row.Start;
+    }
+
+    private void SetWhEnd(int serverDay, string? val)
+    {
+        if (edit is null) return;
+        var row = edit.WorkingHours.FirstOrDefault(x => x.DayOfWeek == serverDay);
+        if (row is null)
+        {
+            row = new TeacherWorkingHourDto(serverDay, "09:00", val ?? "17:00");
+            edit.WorkingHours.Add(row);
+        }
+        else row.End = val ?? row.End;
+    }
+
+    private static string DayName(int uiDay) => System.Globalization.CultureInfo
+        .GetCultureInfo("uk-UA")
+        .DateTimeFormat.DayNames[(uiDay + 1) % 7];
+
+    private IEnumerable<TeacherViewDto> ApplyFilter(IEnumerable<TeacherViewDto> seq)
+    {
+        if (string.IsNullOrWhiteSpace(filter)) return seq;
+        var f = filter.Trim();
+
+        return seq.Where(t =>
+            t.Id.ToString().Contains(f, StringComparison.OrdinalIgnoreCase) ||
+            (t.FullName?.Contains(f, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (t.ScientificDegree?.Contains(f, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (t.AcademicTitle?.Contains(f, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            ModulesCaption(t).Contains(f, StringComparison.OrdinalIgnoreCase)
+        );
+    }
+
+    private IEnumerable<TeacherViewDto> ApplySort(IEnumerable<TeacherViewDto> seq)
+    {
+        return (sortField, sortAsc) switch
+        {
+            (nameof(TeacherViewDto.Id), true) => seq.OrderBy(x => x.Id),
+            (nameof(TeacherViewDto.Id), false) => seq.OrderByDescending(x => x.Id),
+
+            (nameof(TeacherViewDto.FullName), true) => seq.OrderBy(x => x.FullName),
+            (nameof(TeacherViewDto.FullName), false) => seq.OrderByDescending(x => x.FullName),
+
+            (nameof(TeacherViewDto.ScientificDegree), true) => seq.OrderBy(x => x.ScientificDegree),
+            (nameof(TeacherViewDto.ScientificDegree), false) => seq.OrderByDescending(x => x.ScientificDegree),
+
+            (nameof(TeacherViewDto.AcademicTitle), true) => seq.OrderBy(x => x.AcademicTitle),
+            (nameof(TeacherViewDto.AcademicTitle), false) => seq.OrderByDescending(x => x.AcademicTitle),
+
+            (ModulesField, true) => seq.OrderBy(x => x.ModuleIds?.Count ?? 0).ThenBy(x => ModulesCaption(x)),
+            (ModulesField, false) => seq.OrderByDescending(x => x.ModuleIds?.Count ?? 0).ThenByDescending(x => ModulesCaption(x)),
+
+            _ => seq
+        };
+    }
+
+    private IEnumerable<TeacherViewDto> SortedAndFiltered => ApplySort(ApplyFilter(list));
+
+    private void ToggleSort(string field)
+    {
+        if (sortField == field) sortAsc = !sortAsc;
+        else { sortField = field; sortAsc = true; }
+    }
+
+    private MarkupString HeaderIcon(string field)
+        => new(sortField == field ? $"<span class=\"ms-1\">{(sortAsc ? "▲" : "▼")}</span>" : "");
+}
+
+
+

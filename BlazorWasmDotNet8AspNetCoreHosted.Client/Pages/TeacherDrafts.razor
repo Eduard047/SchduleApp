@@ -1,0 +1,2322 @@
+@page "/teacher-drafts"
+@using System;
+@using Microsoft.AspNetCore.Components;
+@using System.Globalization
+@using System.Linq
+@using System.Net
+@using System.Text.Json
+@using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
+@using BlazorWasmDotNet8AspNetCoreHosted.Client.Services
+@using Microsoft.JSInterop
+@using Microsoft.AspNetCore.Components.Web
+@inject HttpClient Http
+@inject ITeacherDraftsApi DraftsApi
+@inject IJSRuntime JS
+
+<h3 class="page-title">Графік викладачів<span class="weak">(тиждень @_weekStart.ToString("yyyy-MM-dd"))</span></h3>
+
+<div class="week-nav">
+    <button class="btn btn-ghost" @onclick="PrevWeek">&lt; Попередній тиждень</button>
+    <div class="week-label">
+        @_weekStart.ToDateTime(TimeOnly.MinValue).ToString("d MMMM yyyy", new CultureInfo("uk-UA")) -
+        @_weekStart.AddDays(6).ToDateTime(TimeOnly.MinValue).ToString("d MMMM yyyy", new CultureInfo("uk-UA"))
+    </div>
+    <button class="btn btn-ghost" @onclick="NextWeek">Наступний тиждень &gt;</button>
+</div>
+
+@code {
+    private MetaResponseDto? _meta;
+
+    private int? _teacherId;
+    private int? _groupId;
+    private int? _roomId;
+    private DateOnly _weekStart = FirstMonday(DateOnly.FromDateTime(DateTime.Today));
+
+    private List<TeacherDraftItemDto> _items = new();
+    private List<TimeSlotDto> _slots = new();
+    private readonly List<ExtraDraftSelection> _extraAssignments = new();
+
+    private readonly Dictionary<int, List<ModuleTopicViewDto>> _topicsCache = new();
+    private readonly Dictionary<int, int?> _lessonTypeRoomCache = new();
+    private List<ModuleTopicViewDto> TopicsForModule(int moduleId) => _topicsCache.TryGetValue(moduleId, out var list) ? list : new List<ModuleTopicViewDto>();
+    private DraftUpsertRequest? _edit;
+    private bool _unrestrictedMode;
+    private readonly HashSet<int> _expandedWarningSlots = new();
+    private readonly Dictionary<int, DraftValidationReportDto> _warningReports = new();
+    private static readonly JsonSerializerOptions WarningJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
+    private string? _ok, _err;
+    private ConflictDetails? _currentConflict;
+    private Dictionary<string, ConflictDetails> _conflictStorage = new();
+    private bool _conflictsLoaded;
+    private static readonly JsonSerializerOptions ConflictJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+    private const string ConflictStorageKey = "teacherDrafts.conflicts.v1";
+
+    private record SlotRow(string Start, string End) { public string Label => $"{Start}-{End}"; }
+    private List<SlotRow> _rows = new();
+    private static readonly string[] UkrainianDayNames = { "Неділя", "Понеділок", "Вівторок", "Середа", "Четвер", "П'ятниця", "Субота" };
+
+    private DragPayload? _dragPayload;
+    private SlotKey? _dragHover;
+    private bool _isProcessingDrop;
+
+    private string CurrentConflictKey => $"{_weekStart:yyyy-MM-dd}|t:{_teacherId?.ToString() ?? "all"}|g:{_groupId?.ToString() ?? "all"}|r:{_roomId?.ToString() ?? "all"}";
+
+    private IEnumerable<TeacherDraftItemDto> Filtered =>
+        _items.Where(i =>
+            (_teacherId is null || i.TeacherId == _teacherId) &&
+            (_groupId is null || i.GroupId == _groupId) &&
+            (_roomId is null || i.RoomId == _roomId)
+        );
+
+    protected override async Task OnInitializedAsync()
+    {
+        _meta = await Http.GetFromJsonAsync<MetaResponseDto>("api/meta");
+        await LoadConflictsAsync();
+        await Reload();
+    }
+
+    private async Task Reload()
+    {
+        await LoadConflictsAsync();
+
+
+        _ok = _err = null;
+        _edit = null;
+        _extraAssignments.Clear();
+        _topicsCache.Clear();
+
+
+        _items = await DraftsApi.GetWeek(_weekStart, _teacherId);
+        _warningReports.Clear();
+        foreach (var draft in _items)
+        {
+            var report = ParseWarningReport(draft.Warnings);
+            if (report is not null)
+            {
+                _warningReports[draft.Id] = report;
+            }
+            if (draft.RequiresRoom && draft.RoomId is int rid && !_lessonTypeRoomCache.ContainsKey(draft.LessonTypeId))
+            {
+                _lessonTypeRoomCache[draft.LessonTypeId] = rid;
+            }
+        }
+        _expandedWarningSlots.RemoveWhere(id => !_warningReports.ContainsKey(id));
+
+
+        var eff = await Http.GetFromJsonAsync<EffectiveSlotsResponse>("api/admin/config/slots");
+        _slots = eff?.slots ?? new();
+
+        _rows = _slots
+            .Select(s => new SlotRow(s.Start, s.End))
+            .GroupBy(x => (x.Start, x.End))
+            .Select(g => g.First())
+            .OrderBy(x => x.Start)
+            .ToList();
+
+        SyncCurrentConflict();
+    }
+
+    private async Task PublishWeek()
+    {
+        _ok = _err = null;
+        try
+        {
+
+            await DraftsApi.PublishWeek(new PublishWeekRequest(
+                WeekStart: _weekStart,
+                TeacherId: null
+            ));
+
+            _ok = "Опубліковано (перевір правила): створені пари додані у загальний розклад, невідповідні — пропущені.";
+            await Reload();
+        }
+        catch (ApiErrorException ex)
+        {
+            await HandleApiError(ex);
+        }
+        catch (Exception ex)
+        {
+            _err = ex.Message;
+        }
+    }
+
+
+    private async Task EnsureTopicsLoaded(int moduleId)
+    {
+        if (moduleId <= 0) return;
+        if (_topicsCache.ContainsKey(moduleId)) return;
+        try
+        {
+            var topics = await Http.GetFromJsonAsync<List<ModuleTopicViewDto>>($"api/admin/modules/{moduleId}/topics");
+            _topicsCache[moduleId] = topics ?? new();
+        }
+        catch (Exception ex)
+        {
+            _err = ex.Message;
+            _topicsCache[moduleId] = new List<ModuleTopicViewDto>();
+        }
+    }
+
+    private ModuleTopicViewDto? FindTopic(int moduleId, int? topicId)
+    {
+        if (moduleId <= 0 || topicId is null) return null;
+        return TopicsForModule(moduleId).FirstOrDefault(t => t.Id == topicId);
+    }
+
+    private void ApplyTopicSelection(int? topicId)
+    {
+        if (_edit is null) return;
+        if (topicId is int tId)
+        {
+            var topic = FindTopic(_edit.ModuleId, tId);
+            if (topic is not null)
+            {
+                _edit = _edit with { ModuleTopicId = tId };
+                ApplyLessonType(topic.LessonTypeId);
+                return;
+            }
+        }
+        _edit = _edit with { ModuleTopicId = null };
+    }
+
+    private bool RoomExists(int roomId) => _meta?.Rooms.Any(r => r.Id == roomId) == true;
+
+    private bool LessonTypeRequiresRoom(int lessonTypeId)
+    {
+        if (lessonTypeId <= 0) return true;
+        var metaType = _meta?.LessonTypes.FirstOrDefault(lt => lt.Id == lessonTypeId);
+        if (metaType is not null)
+        {
+            return metaType.RequiresRoom;
+        }
+
+        var draft = _items.FirstOrDefault(i => i.LessonTypeId == lessonTypeId);
+        return draft?.RequiresRoom ?? true;
+    }
+
+    private void RememberRoom(int lessonTypeId, int? roomId)
+    {
+        if (lessonTypeId <= 0 || roomId is not int rid || !RoomExists(rid)) return;
+        _lessonTypeRoomCache[lessonTypeId] = rid;
+    }
+
+    private int? ResolveRoomForType(int lessonTypeId, bool requiresRoom, bool sameType)
+    {
+        if (!requiresRoom) return null;
+
+        if (sameType && _edit?.RoomId is int current && RoomExists(current))
+        {
+            return current;
+        }
+
+        if (_lessonTypeRoomCache.TryGetValue(lessonTypeId, out var cached) && cached is int cachedRoom && RoomExists(cachedRoom))
+        {
+            return cachedRoom;
+        }
+
+        if (_roomId is int filtered && RoomExists(filtered))
+        {
+            return filtered;
+        }
+
+        return _meta?.Rooms.FirstOrDefault()?.Id;
+    }
+
+    private void ApplyLessonType(int? lessonTypeId)
+    {
+        if (_edit is null) return;
+
+        if (lessonTypeId is not int ltId)
+        {
+            var requiresRoomFallback = LessonTypeRequiresRoom(_edit.LessonTypeId);
+            var roomFallback = ResolveRoomForType(_edit.LessonTypeId, requiresRoomFallback, sameType: true);
+            _edit = _edit with { RequiresRoom = requiresRoomFallback, RoomId = roomFallback };
+            return;
+        }
+
+        if (_edit.LessonTypeId != ltId && _edit.RequiresRoom && _edit.RoomId is int previousRoom)
+        {
+            RememberRoom(_edit.LessonTypeId, previousRoom);
+        }
+
+        var requiresRoom = LessonTypeRequiresRoom(ltId);
+        var sameType = _edit.LessonTypeId == ltId;
+        var resolvedRoom = ResolveRoomForType(ltId, requiresRoom, sameType);
+
+        _edit = _edit with
+        {
+            LessonTypeId = ltId,
+            RequiresRoom = requiresRoom,
+            RoomId = resolvedRoom
+        };
+    }
+
+    private void OnLessonTypeChanged(ChangeEventArgs e)
+    {
+        var value = e.Value?.ToString();
+        var lessonTypeId = int.TryParse(value, out var parsed) ? parsed : (int?)null;
+        ApplyLessonType(lessonTypeId);
+    }
+
+    private void OnRoomChanged(ChangeEventArgs e)
+    {
+        if (_edit is null) return;
+        var value = e.Value?.ToString();
+        var roomId = int.TryParse(value, out var parsed) ? parsed : (int?)null;
+        _edit = _edit with { RoomId = roomId };
+        if (roomId is int rid)
+        {
+            RememberRoom(_edit.LessonTypeId, rid);
+        }
+    }
+
+    private DraftUpsertRequest NormalizeRequest(DraftUpsertRequest request)
+    {
+        var actualRequiresRoom = LessonTypeRequiresRoom(request.LessonTypeId);
+        var normalizedRoomId = actualRequiresRoom ? request.RoomId : null;
+        return request with
+        {
+            RequiresRoom = actualRequiresRoom,
+            RoomId = normalizedRoomId
+        };
+    }
+
+    private static string DraftLessonModeLabel(bool requiresRoom)
+        => requiresRoom ? "Аудиторний захід" : "Дистанційна форма";
+
+    private async Task OnModuleChanged(ChangeEventArgs e)
+    {
+        if (_edit is null) return;
+        var moduleId = int.TryParse(e.Value?.ToString(), out var parsed) ? parsed : 0;
+        await EnsureTopicsLoaded(moduleId);
+        _edit = _edit with { ModuleId = moduleId, ModuleTopicId = null };
+        var firstTopic = TopicsForModule(moduleId).FirstOrDefault();
+        if (firstTopic is not null)
+        {
+            ApplyTopicSelection(firstTopic.Id);
+        }
+    }
+
+    private async Task OnTopicChanged(ChangeEventArgs e)
+    {
+        if (_edit is null) return;
+        var topicId = int.TryParse(e.Value?.ToString(), out var parsed) ? parsed : (int?)null;
+        await EnsureTopicsLoaded(_edit.ModuleId);
+        ApplyTopicSelection(topicId);
+    }
+    private async Task StartEdit(TeacherDraftItemDto item)
+    {
+        await EnsureTopicsLoaded(item.ModuleId);
+        RememberRoom(item.LessonTypeId, item.RoomId);
+        var initialRequest = new DraftUpsertRequest(
+            Id: item.Id,
+            Date: item.Date,
+            TimeStart: item.TimeStart,
+            TimeEnd: item.TimeEnd,
+            GroupId: item.GroupId,
+            ModuleId: item.ModuleId,
+            ModuleTopicId: item.ModuleTopicId,
+            TeacherId: item.TeacherId,
+            RoomId: item.RoomId,
+            RequiresRoom: item.RequiresRoom,
+            LessonTypeId: item.LessonTypeId,
+            OverrideNonWorkingDay: false,
+            BatchKey: item.BatchKey,
+            IsLocked: item.IsLocked,
+            IgnoreValidationErrors: _unrestrictedMode
+        );
+        _edit = NormalizeRequest(initialRequest);
+        ApplyLessonType(_edit.LessonTypeId);
+        ApplyTopicSelection(item.ModuleTopicId);
+        _extraAssignments.Clear();
+    }
+    private async Task StartCreate(int dayNumber, string start, string end)
+    {
+
+        _extraAssignments.Clear();
+
+        if (_meta is null)
+        {
+            _err = "Метадані не завантажені для створення чернетки.";
+            return;
+        }
+
+        var date = DayToDate(dayNumber);
+        var module = _meta.Modules.FirstOrDefault();
+        if (module is null)
+        {
+            _err = "Немає доступних модулів для створення чернетки.";
+            return;
+        }
+
+        await EnsureTopicsLoaded(module.Id);
+        var topics = TopicsForModule(module.Id);
+        var defaultTopic = topics.FirstOrDefault();
+
+        var preservedLessonType = _edit?.LessonTypeId ?? _meta.LessonTypes.FirstOrDefault()?.Id;
+        var lessonTypeId = defaultTopic?.LessonTypeId ?? preservedLessonType;
+        if (lessonTypeId is null)
+        {
+            _err = "Немає доступних типів занять для створення чернетки.";
+            return;
+        }
+
+        var groupId = _groupId ?? _meta.Groups.FirstOrDefault()?.Id;
+        if (groupId is null)
+        {
+            _err = "Немає доступних груп для створення чернетки.";
+            return;
+        }
+
+        var requiresRoom = LessonTypeRequiresRoom(lessonTypeId.Value);
+        var resolvedRoomId = ResolveRoomForType(lessonTypeId.Value, requiresRoom, sameType: false);
+        if (requiresRoom && resolvedRoomId is null)
+        {
+            _err = "Немає доступних аудиторій для цього типу заняття.";
+            return;
+        }
+
+        RememberRoom(lessonTypeId.Value, resolvedRoomId);
+
+        var draftRequest = new DraftUpsertRequest(
+            Id: null,
+            Date: date,
+            TimeStart: start,
+            TimeEnd: end,
+            GroupId: groupId.Value,
+            ModuleId: module.Id,
+            ModuleTopicId: defaultTopic?.Id,
+            TeacherId: _teacherId,
+            RoomId: resolvedRoomId,
+            RequiresRoom: requiresRoom,
+            LessonTypeId: lessonTypeId.Value,
+            OverrideNonWorkingDay: false,
+            BatchKey: null,
+            IsLocked: false,
+            IgnoreValidationErrors: _unrestrictedMode
+        );
+
+        _edit = NormalizeRequest(draftRequest);
+        ApplyLessonType(_edit.LessonTypeId);
+        ApplyTopicSelection(defaultTopic?.Id);
+    }
+
+    private List<DateOnly> GetWeekDates()
+        => Enumerable.Range(0, 7)
+            .Select(offset => _weekStart.AddDays(offset))
+            .ToList();
+
+    private List<LookupDto> ResolveGroups(List<TeacherDraftItemDto> filtered)
+    {
+        if (_meta is null) return new List<LookupDto>();
+
+        if (_groupId is int gid)
+        {
+            var match = _meta.Groups.FirstOrDefault(g => g.Id == gid);
+            return match is null ? new List<LookupDto>() : new List<LookupDto> { match };
+        }
+
+        var ids = filtered.Select(i => i.GroupId).Distinct().ToHashSet();
+        var source = ids.Count > 0
+            ? _meta.Groups.Where(g => ids.Contains(g.Id))
+            : _meta.Groups.AsEnumerable();
+
+        return source
+            .OrderBy(g => g.Name, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
+    }
+
+    private string ModuleCourseCaption(int moduleId)
+    {
+        if (_meta is null) return string.Empty;
+        var module = _meta.Modules.FirstOrDefault(m => m.Id == moduleId);
+        var course = module?.CourseName;
+        return string.IsNullOrWhiteSpace(course) ? string.Empty : course!;
+    }
+
+    private static string ModuleOptionCaption(ModuleMetaDto module)
+    {
+        var codePart = string.IsNullOrWhiteSpace(module.Code) ? null : module.Code.Trim();
+        var title = codePart is null ? module.Name : $"{codePart} {module.Name}";
+        var course = string.IsNullOrWhiteSpace(module.CourseName) ? null : module.CourseName.Trim();
+        return course is null ? title : $"{title} - {course}";
+    }
+
+    private static string TopicOptionCaption(ModuleTopicViewDto topic)
+    {
+        var codePart = string.IsNullOrWhiteSpace(topic.TopicCode) ? null : topic.TopicCode.Trim();
+        return codePart is null ? topic.Title : $"{codePart} {topic.Title}";
+    }
+
+    private static Dictionary<(int DayNumber, string Start, string End, int GroupId), TeacherDraftItemDto> BuildLookup(IEnumerable<TeacherDraftItemDto> items)
+        => items
+            .GroupBy(i => (i.DayNumber, i.TimeStart, i.TimeEnd, i.GroupId))
+            .ToDictionary(g => g.Key, g => g.First());
+
+    private static TeacherDraftItemDto? FindItem(Dictionary<(int DayNumber, string Start, string End, int GroupId), TeacherDraftItemDto> lookup, int dayNumber, SlotRow slot, int groupId)
+        => lookup.TryGetValue((dayNumber, slot.Start, slot.End, groupId), out var value) ? value : null;
+
+
+    private readonly record struct SlotKey(int DayNumber, string Start, string End, int GroupId);
+    private sealed record DragPayload(int ItemId, SlotKey Origin, TeacherDraftItemDto Snapshot);
+
+    private static int DayNumberFromDate(DateOnly date) => date.DayOfWeek switch
+    {
+        DayOfWeek.Sunday => 0,
+        _ => (int)date.DayOfWeek
+    };
+
+    private static string GetDayName(DateOnly date) => UkrainianDayNames[(int)date.DayOfWeek];
+
+    private static bool IsBreak(TeacherDraftItemDto item) => string.Equals(item.LessonTypeCode, "BREAK", StringComparison.OrdinalIgnoreCase);
+    private static bool IsCanceled(TeacherDraftItemDto item) => string.Equals(item.LessonTypeCode, "CANCELED", StringComparison.OrdinalIgnoreCase);
+
+    private static string GetCellCss(TeacherDraftItemDto? item)
+    {
+        if (item is null) return "td-cell-body td-cell-body--empty";
+
+        var classes = new List<string> { "td-cell-body" };
+        var tone = CssByCode(item.LessonTypeCode);
+        if (!string.IsNullOrWhiteSpace(tone))
+        {
+            classes.Add($"td-cell-body--{tone}");
+        }
+        if (item.IsLocked)
+        {
+            classes.Add("td-cell-body--locked");
+        }
+        if (item.Status == DraftStatusDto.Published)
+        {
+            classes.Add("td-cell-body--published");
+        }
+        if (IsBreak(item))
+        {
+            classes.Add("td-cell-body--break");
+        }
+        if (IsCanceled(item))
+        {
+            classes.Add("td-cell-body--canceled");
+        }
+        if (item.IsRescheduled)
+        {
+            classes.Add("td-cell-body--res");
+        }
+
+        return string.Join(' ', classes);
+    }
+
+    private bool CanDragItem(TeacherDraftItemDto? item)
+        => item is { IsLocked: false };
+
+    private string GetCellFrameCss(SlotKey key, TeacherDraftItemDto? item)
+    {
+        var css = "td-cell";
+        if (_dragPayload?.Origin == key)
+        {
+            css += " td-cell--drag-source";
+        }
+
+        if (_dragHover is { } hover && hover == key)
+        {
+            css += item is null ? " td-cell--drop-free" : " td-cell--drop-swap";
+        }
+
+        if (item?.IsLocked == true)
+        {
+            css += " td-cell--locked";
+        }
+
+        return css;
+    }
+
+    private string BuildCellContainerCss(string baseCss, SlotKey key, TeacherDraftItemDto? item)
+    {
+        var css = baseCss;
+        if (CanDragItem(item))
+        {
+            css += " td-cell-body--draggable";
+        }
+
+        if (_dragPayload?.ItemId == item?.Id)
+        {
+            css += " td-cell-body--dragging";
+        }
+
+        if (_dragHover is { } hover && hover == key)
+        {
+            css += item is null ? " td-cell-body--drop-free" : " td-cell-body--drop-swap";
+        }
+
+        return css;
+    }
+
+
+    private SlotKey BuildSlotKey(TeacherDraftItemDto item)
+        => new(item.DayNumber, item.TimeStart, item.TimeEnd, item.GroupId);
+
+
+    private DraftUpsertRequest BuildUpsertRequest(TeacherDraftItemDto item, SlotKey slot, bool ignoreValidation)
+        => NormalizeRequest(new(
+            Id: item.Id,
+            Date: DayToDate(slot.DayNumber),
+            TimeStart: slot.Start,
+            TimeEnd: slot.End,
+            GroupId: slot.GroupId,
+            ModuleId: item.ModuleId,
+            ModuleTopicId: item.ModuleTopicId,
+            TeacherId: item.TeacherId,
+            RoomId: item.RoomId,
+            RequiresRoom: item.RequiresRoom,
+            LessonTypeId: item.LessonTypeId,
+            OverrideNonWorkingDay: false,
+            BatchKey: item.BatchKey,
+            IsLocked: item.IsLocked,
+            IgnoreValidationErrors: ignoreValidation
+        ));
+
+    private void OnItemDragStart(SlotKey origin, TeacherDraftItemDto? item, DragEventArgs e)
+    {
+        if (!CanDragItem(item) || _isProcessingDrop)
+        {
+            return;
+        }
+
+        var snapshot = item! with { };
+        _dragPayload = new DragPayload(item.Id, origin, snapshot);
+        _dragHover = origin;
+
+        if (e.DataTransfer is not null)
+        {
+
+            e.DataTransfer.DropEffect = "move";
+            e.DataTransfer.EffectAllowed = "move";
+        }
+    }
+
+    private void OnItemDragEnd()
+    {
+        _dragPayload = null;
+        _dragHover = null;
+        _isProcessingDrop = false;
+        StateHasChanged();
+    }
+
+    private void OnSlotDragEnter(SlotKey key, TeacherDraftItemDto? target)
+    {
+        if (_dragPayload is null || _isProcessingDrop)
+        {
+            return;
+        }
+
+        if (target?.IsLocked == true && target.Id != _dragPayload.ItemId)
+        {
+            return;
+        }
+
+        if (_dragHover != key)
+        {
+            _dragHover = key;
+            StateHasChanged();
+        }
+    }
+
+    private void OnSlotDragLeave(SlotKey key)
+    {
+        if (_dragHover is { } hover && hover == key)
+        {
+            _dragHover = null;
+            StateHasChanged();
+        }
+    }
+
+    private void OnSlotDragOver(SlotKey key, TeacherDraftItemDto? target, DragEventArgs e)
+    {
+        if (_dragPayload is null || _isProcessingDrop)
+        {
+            return;
+        }
+
+        if (target?.IsLocked == true && target.Id != _dragPayload.ItemId)
+        {
+            return;
+        }
+
+        if (e.DataTransfer is not null)
+        {
+            e.DataTransfer.DropEffect = "move";
+        }
+
+        if (_dragHover != key)
+        {
+            _dragHover = key;
+            StateHasChanged();
+        }
+    }
+
+    private async Task OnSlotDropAsync(SlotKey targetKey, TeacherDraftItemDto? targetItem)
+    {
+        if (_dragPayload is null || _isProcessingDrop)
+        {
+            return;
+        }
+
+        var sourceItem = _items.FirstOrDefault(x => x.Id == _dragPayload.ItemId) ?? _dragPayload.Snapshot;
+        if (sourceItem is null)
+        {
+            return;
+        }
+
+        if (targetItem?.IsLocked == true && targetItem.Id != sourceItem.Id)
+        {
+            _err = "Неможливо перенести пару у заблокований слот.";
+            _dragHover = null;
+            StateHasChanged();
+            return;
+        }
+
+        if (_dragPayload.Origin == targetKey || targetItem?.Id == sourceItem.Id)
+        {
+            return;
+        }
+
+        _ok = null;
+        _err = null;
+        _isProcessingDrop = true;
+
+        try
+        {
+            if (targetItem is null)
+            {
+                await MoveItemAsync(sourceItem, targetKey);
+            }
+            else
+            {
+                await SwapItemsAsync(sourceItem, targetItem, targetKey);
+            }
+
+            await Reload();
+        }
+        catch (ApiErrorException ex)
+        {
+            await HandleApiError(ex);
+        }
+        catch (Exception ex)
+        {
+            _err = ex.Message;
+        }
+        finally
+        {
+            _dragPayload = null;
+            _dragHover = null;
+            _isProcessingDrop = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task MoveItemAsync(TeacherDraftItemDto sourceItem, SlotKey targetKey)
+    {
+        var request = BuildUpsertRequest(sourceItem, targetKey, ignoreValidation: _unrestrictedMode);
+        await DraftsApi.Upsert(request);
+    }
+
+    private async Task SwapItemsAsync(TeacherDraftItemDto sourceItem, TeacherDraftItemDto targetItem, SlotKey targetKey)
+    {
+        var originKey = _dragPayload?.Origin ?? BuildSlotKey(sourceItem);
+        var targetOrigin = BuildSlotKey(targetItem);
+
+        var moveSourceRequest = BuildUpsertRequest(sourceItem, targetKey, ignoreValidation: true);
+        var moveTargetRequest = BuildUpsertRequest(targetItem, originKey, ignoreValidation: _unrestrictedMode);
+        var revalidateSourceRequest = BuildUpsertRequest(sourceItem, targetKey, ignoreValidation: _unrestrictedMode);
+        var revertSourceRequest = BuildUpsertRequest(sourceItem, originKey, ignoreValidation: true);
+        var revertTargetRequest = BuildUpsertRequest(targetItem, targetOrigin, ignoreValidation: true);
+
+        var targetMoved = false;
+
+        try
+        {
+            await DraftsApi.Upsert(moveSourceRequest);
+            await DraftsApi.Upsert(moveTargetRequest);
+            targetMoved = true;
+
+            if (!_unrestrictedMode)
+            {
+                await DraftsApi.Upsert(revalidateSourceRequest);
+            }
+        }
+        catch
+        {
+            if (targetMoved)
+            {
+                await DraftsApi.Upsert(revertTargetRequest);
+            }
+
+            await DraftsApi.Upsert(revertSourceRequest);
+            throw;
+        }
+    }
+
+    private static string GetStatusBadgeCss(DraftStatusDto status) => status switch
+    {
+        DraftStatusDto.Published => "badge-published",
+        _ => "badge-draft"
+    };
+
+    private static string FormatStatus(DraftStatusDto status) => status switch
+    {
+        DraftStatusDto.Published => "Опубліковано",
+        _ => "Чернетка"
+    };
+
+    private async Task SaveEdit()
+    {
+        if (_edit is null) return;
+        _ok = _err = null;
+        try
+        {
+            var payload = NormalizeRequest(_edit with { IgnoreValidationErrors = _unrestrictedMode });
+            var hasExtras = _edit.Id is null && _extraAssignments.Count > 0;
+            var resolvedBatchKey = hasExtras
+                ? (payload.BatchKey ?? $"clone-{Guid.NewGuid():N}")
+                : payload.BatchKey;
+
+            var primaryRequest = NormalizeRequest(payload with { BatchKey = resolvedBatchKey });
+            var id = await DraftsApi.Upsert(primaryRequest);
+            var cloneIds = new List<int>();
+
+            if (hasExtras && !string.IsNullOrWhiteSpace(resolvedBatchKey))
+            {
+                foreach (var extra in _extraAssignments.ToList())
+                {
+                    var groupId = extra.GroupId ?? primaryRequest.GroupId;
+                    var teacherId = extra.TeacherId ?? primaryRequest.TeacherId;
+                    if (teacherId == primaryRequest.TeacherId && groupId == primaryRequest.GroupId)
+                    {
+                        continue;
+                    }
+
+                    var cloneRequest = NormalizeRequest(primaryRequest with
+                    {
+                        Id = null,
+                        GroupId = groupId,
+                        TeacherId = teacherId
+                    });
+
+                    var cloneId = await DraftsApi.Upsert(cloneRequest);
+                    cloneIds.Add(cloneId);
+                }
+            }
+
+            var suffix = cloneIds.Count > 0 ? $" (+{cloneIds.Count} дубль.)" : string.Empty;
+
+            _ok = $"Збережено (Id = {id}){suffix}.";
+            _extraAssignments.Clear();
+            await Reload();
+        }
+        catch (ApiErrorException ex)
+        {
+            await HandleApiError(ex);
+        }
+        catch (Exception ex)
+        {
+            _err = ex.Message;
+        }
+    }
+    private async Task DeleteEdit()
+    {
+        if (_edit?.Id is not int id) { _err = "Виберіть чернетку для видалення."; return; }
+        try
+        {
+            await DraftsApi.Delete(id);
+            _ok = $"Видалено (Id = {id}).";
+            await Reload();
+        }
+        catch (ApiErrorException ex)
+        {
+            await HandleApiError(ex);
+        }
+        catch (Exception ex)
+        {
+            _err = ex.Message;
+        }
+    }
+
+    private async Task HandleApiError(ApiErrorException ex)
+    {
+        var headline = ComposeErrorHeadline(ex);
+        _err = headline;
+
+        if (ex.StatusCode == HttpStatusCode.Conflict && (ex.Errors.Count > 0 || ex.Warnings.Count > 0))
+        {
+            var expanded = _conflictStorage.TryGetValue(CurrentConflictKey, out var existing)
+                ? existing.Expanded
+                : true;
+
+            var details = new ConflictDetails
+            {
+                Message = headline,
+                Errors = ex.Errors.ToList(),
+                Warnings = ex.Warnings.ToList(),
+                SavedAt = DateTimeOffset.Now,
+                Expanded = expanded
+            };
+            _conflictStorage[CurrentConflictKey] = details;
+            _currentConflict = details;
+            await PersistConflictsAsync();
+        }
+    }
+
+    private static string ComposeErrorHeadline(ApiErrorException ex)
+    {
+        var parts = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(ex.Message))
+        {
+            parts.Add(ex.Message.Trim());
+        }
+
+        var firstError = ex.Errors.FirstOrDefault(e => !string.IsNullOrWhiteSpace(e));
+        if (!string.IsNullOrWhiteSpace(firstError))
+        {
+            parts.Add(firstError!.Trim());
+        }
+        else
+        {
+            var firstWarning = ex.Warnings.FirstOrDefault(w => !string.IsNullOrWhiteSpace(w));
+            if (!string.IsNullOrWhiteSpace(firstWarning))
+            {
+                parts.Add(firstWarning!.Trim());
+            }
+        }
+
+        if (parts.Count == 0)
+        {
+            return "Сталася помилка.";
+        }
+
+        return parts.Count == 1 ? parts[0] : string.Join(": ", parts.Distinct(StringComparer.Ordinal));
+    }
+
+    private async Task LoadConflictsAsync()
+    {
+        if (_conflictsLoaded) return;
+        _conflictsLoaded = true;
+
+        try
+        {
+            var json = await JS.InvokeAsync<string?>("localStorage.getItem", ConflictStorageKey);
+            if (!string.IsNullOrWhiteSpace(json))
+            {
+                var data = JsonSerializer.Deserialize<Dictionary<string, ConflictDetails>>(json, ConflictJsonOptions);
+                if (data is not null)
+                {
+                    _conflictStorage = data;
+                }
+            }
+        }
+        catch
+        {
+            _conflictStorage = new();
+        }
+    }
+
+    private async Task PersistConflictsAsync()
+    {
+        try
+        {
+            if (_conflictStorage.Count == 0)
+            {
+                await JS.InvokeVoidAsync("localStorage.removeItem", ConflictStorageKey);
+            }
+            else
+            {
+                var json = JsonSerializer.Serialize(_conflictStorage, ConflictJsonOptions);
+                await JS.InvokeVoidAsync("localStorage.setItem", ConflictStorageKey, json);
+            }
+        }
+        catch
+        {
+
+        }
+    }
+
+    private void SyncCurrentConflict()
+    {
+        _conflictStorage.TryGetValue(CurrentConflictKey, out _currentConflict);
+    }
+
+    private async Task ToggleConflictDetails()
+    {
+        if (_currentConflict is null) return;
+        _currentConflict.Expanded = !_currentConflict.Expanded;
+        _conflictStorage[CurrentConflictKey] = _currentConflict;
+        await PersistConflictsAsync();
+    }
+
+    private async Task ClearConflictDetails()
+    {
+        if (_conflictStorage.Remove(CurrentConflictKey))
+        {
+            _currentConflict = null;
+            await PersistConflictsAsync();
+        }
+    }
+    private void CancelEdit()
+    {
+        _edit = null;
+        _extraAssignments.Clear();
+    }
+
+    private void AddExtraAssignment()
+    {
+        _extraAssignments.Add(new ExtraDraftSelection());
+    }
+
+    private void RemoveExtraAssignment(ExtraDraftSelection item)
+    {
+        _extraAssignments.Remove(item);
+    }
+
+    private sealed class ExtraDraftSelection
+    {
+        public int? GroupId { get; set; }
+        public int? TeacherId { get; set; }
+    }
+
+    private static DateOnly FirstMonday(DateOnly d)
+        => d.AddDays(-(((int)d.DayOfWeek + 6) % 7));
+
+    private DateOnly DayToDate(int dayNumber)
+    {
+
+        var dow = (DayOfWeek)dayNumber;
+        var currentMonday = FirstMonday(_weekStart);
+        var byDow = (int)dow == 0 ? 6 : ((int)dow - 1);
+        return currentMonday.AddDays(byDow);
+    }
+
+    private sealed class ConflictDetails
+    {
+        public string Message { get; init; } = string.Empty;
+        public List<string> Errors { get; init; } = new();
+        public List<string> Warnings { get; init; } = new();
+        public DateTimeOffset SavedAt { get; init; } = DateTimeOffset.Now;
+        public bool Expanded { get; set; } = true;
+        public string ToggleLabel => Expanded ? "Згорнути" : "Розгорнути";
+    }
+
+    private sealed record EffectiveSlotsResponse(int? courseId, bool usingCourseSpecific, List<TimeSlotDto> slots);
+
+    static string CssByCode(string code) => code switch
+    {
+        "LECTURE" => "lec",
+        "SEMINAR" => "sem",
+        "LAB" => "lab",
+        "PRACTICE" => "prc",
+        "CANCELED" => "can",
+        "RESCHEDULED" => "res",
+        "BREAK" => "brk",
+        _ => ""
+    };
+
+    private Task PrevWeek() { _weekStart = _weekStart.AddDays(-7); return Reload(); }
+    private Task NextWeek() { _weekStart = _weekStart.AddDays(+7); return Reload(); }
+    private void ResetFilters() { _teacherId = _groupId = _roomId = null; StateHasChanged(); }
+
+    private DraftValidationReportDto? ParseWarningReport(string? raw)
+    {
+
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        try
+        {
+            return JsonSerializer.Deserialize<DraftValidationReportDto>(raw, WarningJsonOptions);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static (int errors, int warnings) CountIssues(DraftValidationReportDto report)
+    {
+
+        var errors = report.Issues.Count(i => string.Equals(i.Severity, "error", StringComparison.OrdinalIgnoreCase));
+        var warnings = report.Issues.Count(i => string.Equals(i.Severity, "warning", StringComparison.OrdinalIgnoreCase));
+        return (errors, warnings);
+    }
+
+    private void ToggleWarningPanel(int itemId)
+    {
+
+        if (_expandedWarningSlots.Contains(itemId))
+            _expandedWarningSlots.Remove(itemId);
+        else
+            _expandedWarningSlots.Add(itemId);
+    }
+
+    private void HandleUnrestrictedChange(ChangeEventArgs e)
+    {
+
+        var enabled = e.Value switch
+        {
+            bool b => b,
+            string s when bool.TryParse(s, out var parsed) => parsed,
+            _ => false
+        };
+        _unrestrictedMode = enabled;
+        if (_edit is not null)
+        {
+            _edit = _edit with { IgnoreValidationErrors = _unrestrictedMode };
+        }
+    }
+
+}
+
+
+<div class="toolbar">
+    <select class="select select--narrow" @bind="_teacherId">
+        <option value="">Обрати викладача</option>
+        @if (_meta is not null)
+        {
+            foreach (var t in _meta.Teachers)
+            {
+                <option value="@t.Id">@t.Name</option>
+            }
+        }
+    </select>
+
+    <select class="select" @bind="_groupId">
+        <option value="">Обрати групу</option>
+        @if (_meta is not null)
+        {
+            foreach (var g in _meta.Groups)
+            {
+                <option value="@g.Id">@g.Name</option>
+            }
+        }
+    </select>
+
+    <select class="select" @bind="_roomId">
+        <option value="">Обрати аудиторію</option>
+        @if (_meta is not null)
+        {
+            foreach (var r in _meta.Rooms)
+            {
+                <option value="@r.Id">@r.Name</option>
+            }
+        }
+    </select>
+
+    <input type="date"
+           class="select"
+           value="@_weekStart.ToString("yyyy-MM-dd")"
+           @onchange="e => _weekStart = FirstMonday(DateOnly.Parse((string)e.Value!))" />
+
+    <button class="btn btn-primary" @onclick="Reload">Оновити</button>
+    <button class="btn btn-ghost" @onclick="ResetFilters">Скинути</button>
+</div>
+
+
+<div class="actions">
+    <div class="group">
+        <div class="caption">Публікація</div>
+        <div class="row">
+            <button class="btn btn-primary" @onclick="PublishWeek">Опублікувати тиждень у розклад</button>
+        </div>
+        <div class="hint">Публікуються всі чернетки за обраний тиждень (по всіх викладачах).</div>
+
+    </div>
+</div>
+
+
+
+<div class="unrestricted-toggle">
+    <label class="unrestricted-check">
+        <input type="checkbox" checked="@_unrestrictedMode" @onchange="HandleUnrestrictedChange" />
+        <span>Увімкнути редагування без обмежень</span>
+    </label>
+    <div class="unrestricted-hint">Усі конфлікти все одно будуть зібрані в слоті. Використовуйте режим лише за потреби.</div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_ok))
+{
+    <div class="alert alert-ok">@_ok</div>
+}
+@if (!string.IsNullOrWhiteSpace(_err))
+{
+    <div class="alert alert-err">@_err</div>
+}
+@if (_currentConflict is not null)
+{
+    <div class="alert alert-conflict">
+        <div class="conflict-head">
+            <div>
+                <strong>Конфлікт чернеток:</strong> @_currentConflict.Message
+                <div class="conflict-meta">
+                    Тиждень: @_weekStart.ToString("dd.MM.yyyy") тАУ @_weekStart.AddDays(6).ToString("dd.MM.yyyy"). Збережено @_currentConflict.SavedAt.ToLocalTime().ToString("dd.MM.yyyy HH:mm").
+                </div>
+            </div>
+            <div class="conflict-actions">
+                <button class="btn btn-ghost btn-sm" type="button" @onclick="ToggleConflictDetails">@_currentConflict.ToggleLabel</button>
+                <button class="btn btn-ghost btn-sm" type="button" @onclick="ClearConflictDetails">Очистити</button>
+            </div>
+        </div>
+
+        @if (_currentConflict.Expanded && _currentConflict.Errors.Count > 0)
+        {
+            <ul class="conflict-list">
+                @foreach (var err in _currentConflict.Errors)
+                {
+                    <li>@err</li>
+                }
+            </ul>
+        }
+
+        @if (_currentConflict.Expanded && _currentConflict.Warnings.Count > 0)
+        {
+            <div class="conflict-warnings">
+                <div class="conflict-warnings-title">Попередження:</div>
+                <ul class="conflict-list">
+                    @foreach (var warn in _currentConflict.Warnings)
+                    {
+                        <li>@warn</li>
+                    }
+                </ul>
+            </div>
+        }
+    </div>
+}
+
+@if (_rows.Count == 0)
+{
+    <div class="empty">Немає визначених тайм-слотів — додайте їх у конфігурації.</div>
+}
+else
+{
+    var filtered = Filtered.ToList();
+    var groups = ResolveGroups(filtered);
+    var weekDays = GetWeekDates();
+    var slots = _rows;
+    var lookup = BuildLookup(filtered);
+    var monday = _weekStart;
+    var isoWeek = ISOWeek.GetWeekOfYear(monday.ToDateTime(TimeOnly.MinValue));
+
+    if (groups.Count == 0)
+    {
+        <div class="alert alert-info">Немає груп для відображення. Виберіть параметри через фільтри.</div>
+    }
+    else if (slots.Count == 0)
+    {
+        <div class="alert alert-info">Немає визначених часових слотів для відображення.</div>
+    }
+    else
+    {
+        <div class="teacher-drafts-print-header">
+            <div class="teacher-drafts-print-title">Розклад навчальних занять (чернетка)</div>
+            <div class="teacher-drafts-print-dates">Тиждень № @isoWeek | @monday.ToString("dd.MM.yyyy") - @monday.AddDays(6).ToString("dd.MM.yyyy")</div>
+        </div>
+
+        <div class="teacher-drafts-table-wrapper">
+            <table class="teacher-drafts-table">
+                <thead>
+                    <tr>
+                        <th colspan="2" class="td-head-block">Дні тижня / години</th>
+                        <th colspan="@groups.Count" class="td-head-groups">Навчальні групи</th>
+                    </tr>
+                    <tr>
+                        <th class="td-day-col">День</th>
+                        <th class="td-slot-col">Пара</th>
+                        @foreach (var group in groups)
+                        {
+                            <th class="td-group-col">@group.Name</th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var day in weekDays)
+                    {
+                        var dayNumber = DayNumberFromDate(day);
+                        var totalSlots = slots.Count;
+                        for (var slotIndex = 0; slotIndex < totalSlots; slotIndex++)
+                        {
+                            var slot = slots[slotIndex];
+                            <tr>
+                                @if (slotIndex == 0)
+                                {
+                                    <th class="td-day-col td-day-cell" rowspan="@totalSlots">
+                                        <div class="td-day-name">@GetDayName(day)</div>
+                                        <div class="td-day-date">@day.ToString("dd.MM.yyyy")</div>
+                                    </th>
+                                }
+                                <th class="td-slot-col td-slot-cell">
+                                    <div class="td-slot-number">@((slotIndex + 1).ToString("00"))</div>
+                                    <div class="td-slot-time">@slot.Label</div>
+                                </th>
+                                @foreach (var group in groups)
+                                {
+                                    var item = FindItem(lookup, dayNumber, slot, group.Id);
+                                    var cellCss = GetCellCss(item);
+                                    var slotKey = new SlotKey(dayNumber, slot.Start, slot.End, group.Id);
+                                    var tdCss = GetCellFrameCss(slotKey, item);
+                                    var wrapperCss = BuildCellContainerCss(cellCss, slotKey, item);
+                                    var canDrag = CanDragItem(item);
+                                    <td class="@tdCss"
+                                        @ondblclick="async () => await StartCreate(dayNumber, slot.Start, slot.End)"
+                                        @ondragover="e => OnSlotDragOver(slotKey, item, e)" @ondragover:preventDefault
+                                        @ondragenter="() => OnSlotDragEnter(slotKey, item)"
+                                        @ondragleave="() => OnSlotDragLeave(slotKey)"
+                                        @ondrop="async e => await OnSlotDropAsync(slotKey, item)" @ondrop:preventDefault>
+                                        <div class="@wrapperCss"
+                                             data-drag-id="@((canDrag && item is not null) ? item.Id.ToString() : null)">
+                                            @if (canDrag && item is not null)
+                                            {
+                                                <div class="td-cell-drag-handle"
+                                                     draggable="true"
+                                                     title="Drag handle"
+                                                     @onmousedown:preventDefault
+                                                     @ondragstart="e => OnItemDragStart(slotKey, item, e)"
+                                                     @ondragend="OnItemDragEnd">
+                                                    <span aria-hidden="true">&#9776;</span>
+                                                </div>
+                                            }
+                                            @if (item is null)
+                                            {
+                                                <span class="td-empty">Вільно</span>
+                                            }
+                                            else if (IsBreak(item) || IsCanceled(item))
+                                            {
+                                                <div class="td-cell-title">@item.LessonTypeName</div>
+                                                <div class="td-cell-meta">@slot.Label</div>
+                                                <div class="td-cell-actions">
+                                                    <button class="btn btn-ghost btn-sm td-edit-btn text-danger" title="╨а╨╡╨┤╨░╨│╤Г╨▓╨░╤В╨╕" @onclick="async () => await StartEdit(item)">
+                                                        <span class="td-edit-icon" aria-hidden="true">✎</span>
+                                                    </button>
+                                                </div>
+                                            }
+                                            else
+                                            {
+                                                var moduleCourse = ModuleCourseCaption(item.ModuleId);
+                                                <div class="td-cell-title">
+                                                    <div>@item.Module</div>
+                                                    @if (!string.IsNullOrWhiteSpace(moduleCourse))
+                                                    {
+                                                        <div class="td-cell-course text-muted small">@moduleCourse</div>
+                                                    }
+                                                </div>
+                                                @if (!string.IsNullOrWhiteSpace(item.TopicCode))
+                                                {
+                                                    <div class="td-topic text-muted">@item.TopicCode - @item.TopicTitle</div>
+                                                }
+
+                                                @if (item.TeacherNames is { Count: > 0 })
+                                                {
+                                                    <div class="td-cell-teacher">
+                                                        @foreach (var teacherName in item.TeacherNames)
+                                                        {
+                                                            <div>@teacherName</div>
+                                                        }
+                                                    </div>
+                                                }
+                                                else if (!string.IsNullOrWhiteSpace(item.Teacher))
+                                                {
+                                                    <div class="td-cell-teacher">@item.Teacher</div>
+                                                }
+                                                <div class="td-cell-meta">
+                                                    <span>@item.LessonTypeName</span>
+                                                    <span class="td-slot-mode">@DraftLessonModeLabel(item.RequiresRoom)</span>
+                                                    @if (item.RequiresRoom && !string.IsNullOrWhiteSpace(item.Room))
+                                                    {
+                                                        <span>Ауд. @item.Room</span>
+                                                    }
+                                                </div>
+                                                @if (item.IsRescheduled)
+                                                {
+                                                    <div class="td-cell-flag">Перенесено</div>
+                                                }
+                                                @if (_warningReports.TryGetValue(item.Id, out var report))
+                                                {
+                                                    var expanded = _expandedWarningSlots.Contains(item.Id);
+                                                    var (errorCount, warningCount) = CountIssues(report);
+                                                    <div class="td-slot-alert">
+                                                        <div class="td-slot-alert-head">
+                                                            <button type="button" class="td-slot-alert-toggle" @onclick="() => ToggleWarningPanel(item.Id)">
+                                                                @(expanded ? "Згорнути попередження" : "Розгорнути попередження")
+                                                            </button>
+                                                            <div class="td-slot-alert-summary">
+                                                                <span class="td-slot-alert-badge td-slot-alert-badge--error">Критичних: @errorCount</span>
+                                                                <span class="td-slot-alert-badge td-slot-alert-badge--warn">Застережень: @warningCount</span>
+                                                                <span class="td-slot-alert-time">Оновлено: @report.GeneratedAt.ToLocalTime().ToString("dd.MM.yyyy HH:mm")</span>
+                                                            </div>
+                                                        </div>
+                                                        @if (expanded)
+                                                        {
+                                                            <div class="td-slot-alert-body">
+                                                                @foreach (var issue in report.Issues)
+                                                                {
+                                                                    <div class="@(string.Equals(issue.Severity, "error", StringComparison.OrdinalIgnoreCase) ? "td-slot-issue td-slot-issue--error" : "td-slot-issue td-slot-issue--warning")">
+                                                                        <div class="td-slot-issue-title">@issue.Title</div>
+                                                                        <div class="td-slot-issue-text">@issue.Description</div>
+                                                                    </div>
+                                                                }
+                                                            </div>
+                                                        }
+                                                    </div>
+                                                }
+                                                <div class="td-cell-footer">
+                                                    <span class="badge @GetStatusBadgeCss(item.Status)">@FormatStatus(item.Status)</span>
+                                                    <button class="btn btn-ghost btn-sm td-edit-btn text-danger" title="Редагувати" @onclick="async () => await StartEdit(item)">
+                                                        <span class="td-edit-icon" aria-hidden="true">✎</span>
+                                                    </button>
+                                                </div>
+                                            }
+                                        </div>
+                                    </td>
+                                }
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+}
+
+@if (_edit is not null && _meta is not null)
+{
+    
+    <div class="editor">
+        <div class="editor-title">Редактор чернетки</div>
+        @{
+            var moduleTopics = TopicsForModule(_edit!.ModuleId);
+            var selectedModule = _meta.Modules.FirstOrDefault(m => m.Id == _edit!.ModuleId);
+            var selectedTopic = _edit!.ModuleTopicId is int topicId
+                ? moduleTopics.FirstOrDefault(t => t.Id == topicId)
+                : null;
+        }
+        <div class="editor-grid">
+            <div class="editor-field">
+                <label>Дата</label>
+                <input type="date" class="select"
+                       value="@_edit!.Date.ToString("yyyy-MM-dd")"
+                       @onchange="e => _edit = _edit! with { Date = DateOnly.Parse((string)e.Value!) }" />
+            </div>
+
+            <div class="editor-field">
+                <label>Початок</label>
+                <input type="time" class="select"
+                       value="@_edit!.TimeStart"
+                       @onchange="e => _edit = _edit! with { TimeStart = (string)e.Value! }" />
+            </div>
+
+            <div class="editor-field">
+                <label>Кінець</label>
+                <input type="time" class="select"
+                       value="@_edit!.TimeEnd"
+                       @onchange="e => _edit = _edit! with { TimeEnd = (string)e.Value! }" />
+            </div>
+
+            <div class="editor-field">
+                <label>Група</label>
+                <select class="select" @onchange="e => _edit = _edit! with { GroupId = int.Parse((string)e.Value!) }">
+                    @foreach (var g in _meta.Groups)
+                    {
+                        <option value="@g.Id" selected="@(@g.Id == _edit!.GroupId)">@g.Name</option>
+                    }
+                </select>
+            </div>
+
+            <div class="editor-field">
+                <label>Тип</label>
+                <select class="select" @onchange="OnLessonTypeChanged">
+                    @foreach (var t in _meta.LessonTypes)
+                    {
+                        <option value="@t.Id" selected="@(@t.Id == _edit!.LessonTypeId)">@t.Name</option>
+                    }
+                </select>
+            </div>
+
+            <div class="editor-field editor-field--wide">
+                <label>
+                    Модуль
+                    @if (!string.IsNullOrWhiteSpace(selectedModule?.Code))
+                    {
+                        <span class="editor-code">@selectedModule?.Code</span>
+                    }
+                </label>
+                <select class="select" @onchange="OnModuleChanged">
+                    @foreach (var m in _meta.Modules)
+                    {
+                        <option value="@m.Id" selected="@(@m.Id == _edit!.ModuleId)">@ModuleOptionCaption(m)</option>
+                    }
+                </select>
+            </div>
+            <div class="editor-field editor-field--wide">
+                <label>
+                    Тема заняття
+                    @if (!string.IsNullOrWhiteSpace(selectedTopic?.TopicCode))
+                    {
+                        <span class="editor-code">@selectedTopic?.TopicCode</span>
+                    }
+                </label>
+                <select class="select"
+                        disabled="@(moduleTopics.Count == 0)"
+                        @onchange="OnTopicChanged">
+                    @if (moduleTopics.Count == 0)
+                    {
+                        <option value="">(я┐╜я┐╜я┐╜я┐╜ я┐╜ я┐╜я┐╜я┐╜я┐╜я┐╜)</option>
+                        <option value="">(Теми недоступні)</option>
+                    }
+                    else
+                    {
+                        @foreach (var topic in moduleTopics)
+                        {
+                            <option value="@topic.Id" selected="@(@topic.Id == _edit!.ModuleTopicId)">
+                                @TopicOptionCaption(topic)
+                            </option>
+                        }
+                    }
+                </select>
+            </div>
+
+            <div class="editor-field">
+                <label>Викладач</label>
+                <select class="select" @onchange="e => _edit = _edit! with { TeacherId = int.TryParse((string?)e.Value, out var v) ? v : (int?)null }">
+                    <option value="">(без викладача)</option>
+                    @foreach (var t in _meta.Teachers)
+                    {
+                        <option value="@t.Id" selected="@(@t.Id == _edit!.TeacherId)">@t.Name</option>
+                    }
+                </select>
+            </div>
+
+            <div class="editor-field">
+                <label>
+                    Аудиторія
+                    <span class="td-room-mode @(_edit.RequiresRoom ? "td-room-mode--required" : "td-room-mode--optional")">@DraftLessonModeLabel(_edit.RequiresRoom)</span>
+                </label>
+                <select class="select" @onchange="OnRoomChanged" disabled="@(!_edit.RequiresRoom)">
+                    <option value="">(без аудиторії)</option>
+                    @foreach (var r in _meta.Rooms)
+                    {
+                        <option value="@r.Id" selected="@(@r.Id == _edit!.RoomId)">@r.Name</option>
+                    }
+                </select>
+            </div>
+
+            <div class="editor-field editor-field--full editor-lock">
+                <label class="ck">
+                    <input type="checkbox" checked="@_edit.IsLocked"
+                           @onchange="e => _edit = _edit! with { IsLocked = (bool)e.Value! }" />
+                    <span>🔒 Зафіксувати</span>
+                </label>
+            </div>
+        </div>
+
+        @if (_edit?.Id is null)
+        {
+            
+            <div class="extra-duplicates">
+                <div class="extra-duplicates-header">Дублювання пари</div>
+                <p class="extra-duplicates-hint">Вкажіть додаткові групи та викладачів, щоб автоматично створити копії під час збереження.</p>
+                @if (_extraAssignments.Count == 0)
+                {
+                    <div class="extra-duplicates-empty">Додаткові дублікати не вибрані.</div>
+                }
+
+                @foreach (var extra in _extraAssignments)
+                {
+                    <div class="extra-duplicates-row" @key="extra">
+                        <div>
+                            <label>Обрати додаткову групу</label>
+                            <select class="select" @onchange="e => extra.GroupId = int.TryParse((string?)e.Value, out var g) ? g : (int?)null">
+                                <option value="">(не вибрано)</option>
+                                @foreach (var g in _meta.Groups)
+                                {
+                                    <option value="@g.Id" selected="@(@g.Id == extra.GroupId)">@g.Name</option>
+                                }
+                            </select>
+                        </div>
+
+                        <div>
+                            <label>Обрати додаткового вчителя</label>
+                            <select class="select" @onchange="e => extra.TeacherId = int.TryParse((string?)e.Value, out var t) ? t : (int?)null">
+                                <option value="">(залишити основного)</option>
+                                @foreach (var t in _meta.Teachers)
+                                {
+                                    <option value="@t.Id" selected="@(@t.Id == extra.TeacherId)">@t.Name</option>
+                                }
+                            </select>
+                        </div>
+
+                        <button type="button"
+                                class="btn btn-ghost extra-duplicates-remove"
+                                title="Прибрати дубль"
+                                @onclick="() => RemoveExtraAssignment(extra)">×</button>
+                    </div>
+                }
+
+                <button type="button" class="btn btn-secondary extra-duplicates-add" @onclick="AddExtraAssignment">Додати дубль</button>
+            </div>
+        }
+
+        <div class="editor-actions">
+            <button class="btn btn-primary" @onclick="SaveEdit">Зберегти</button>
+            @if (_edit?.Id is int)
+            {
+                <button class="btn btn-ghost" @onclick="DeleteEdit">Видалити</button>
+            }
+            <button class="btn btn-ghost" @onclick="CancelEdit">Скасувати</button>
+        </div>
+    </div>
+}
+
+<style>
+    .page-title {
+        margin: .5rem 0 1rem;
+    }
+
+    .page-title .weak {
+        color: #64748b;
+        font-weight: 400;
+    }
+
+    .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .5rem;
+        align-items: center;
+        margin-bottom: 12px;
+    }
+
+    .select {
+        min-width: 160px;
+        padding: .46rem .6rem;
+        border: 1px solid #dfe3e8;
+        border-radius: 10px;
+        background: #fff;
+    }
+
+    .select--narrow {
+        width: 240px;
+        max-width: 240px;
+    }
+
+    .actions {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin-bottom: 12px;
+    }
+
+    .actions .group {
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 10px 12px;
+    }
+
+    .actions .caption {
+        font-weight: 700;
+        margin-bottom: .35rem;
+    }
+
+    .actions .row {
+        display: flex;
+        gap: .5rem;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+
+    .actions .hint {
+        color: #64748b;
+        font-size: .875rem;
+    }
+
+    .btn {
+        padding: .5rem .9rem;
+        border-radius: 10px;
+        border: 1px solid transparent;
+        cursor: pointer;
+        font-weight: 600;
+    }
+
+    .btn-primary {
+        background: #111827;
+        color: #fff;
+    }
+
+    .btn-ghost {
+        background: #fff;
+        color: #111827;
+        border-color: #d1d5db;
+    }
+
+    .btn-sm {
+        padding: .2rem .5rem;
+        font-size: .85rem;
+    }
+    .td-slot-mode {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        margin-left: 6px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: .72rem;
+        font-weight: 600;
+        background: #eef2ff;
+        color: #4338ca;
+    }
+
+    .td-room-mode {
+        margin: 4px 0;
+        font-size: .78rem;
+        font-weight: 600;
+    }
+
+    .td-room-mode--required {
+        color: #1f2937;
+    }
+
+    .td-room-mode--optional {
+        color: #6b7280;
+    }
+
+    .alert {
+        margin: 8px 0;
+        padding: 10px 12px;
+        border-radius: 10px;
+    }
+
+    .alert-ok {
+        background: #ecfdf5;
+        border: 1px solid #a7f3d0;
+        color: #065f46;
+    }
+
+    .alert-err {
+        background: #fef2f2;
+        border: 1px solid #fecaca;
+        color: #991b1b;
+    }
+
+    .alert-conflict {
+        background: #fff7ed;
+        border: 1px solid #fed7aa;
+        color: #7c2d12;
+    }
+
+    .alert-info {
+        background: #eff6ff;
+        border: 1px solid #bfdbfe;
+        color: #1e3a8a;
+    }
+
+    .conflict-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .conflict-meta {
+        color: #64748b;
+        font-size: .85rem;
+        margin-top: 2px;
+    }
+
+    .conflict-actions {
+        display: inline-flex;
+        gap: 6px;
+    }
+
+    .conflict-list {
+        margin: 8px 0 0;
+        padding-left: 20px;
+        color: #1f2937;
+    }
+
+    .conflict-warnings {
+        margin-top: 8px;
+    }
+
+    .conflict-warnings-title {
+        font-weight: 600;
+        color: #92400e;
+        margin-bottom: 4px;
+    }
+
+    .empty {
+        color: #64748b;
+    }
+
+    .teacher-drafts-print-header {
+        text-align: center;
+        margin: 1.2rem 0 .8rem;
+    }
+
+    .teacher-drafts-print-title {
+        text-transform: uppercase;
+        font-weight: 700;
+        font-size: 1.05rem;
+    }
+
+    .teacher-drafts-print-dates {
+        color: #475569;
+        font-size: .85rem;
+        margin-top: .15rem;
+    }
+
+    .teacher-drafts-table-wrapper {
+        overflow-x: auto;
+        border: 1px solid #e2e8f0;
+        border-radius: 16px;
+        background: #fff;
+        padding: 1rem;
+    }
+
+    .teacher-drafts-table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+        font-size: .9rem;
+    }
+
+    .teacher-drafts-table th,
+    .teacher-drafts-table td {
+        border: 1px solid #d9e2ec;
+        padding: .55rem;
+        vertical-align: top;
+        background: #fff;
+    }
+
+    .teacher-drafts-table th {
+        background: #f8fafc;
+        text-align: center;
+        font-weight: 700;
+        font-size: .85rem;
+    }
+
+    .td-head-block,
+    .td-head-groups {
+        text-transform: uppercase;
+    }
+
+    .td-group-col {
+        font-weight: 600;
+        text-align: center;
+    }
+
+    .td-day-col {
+        width: 160px;
+    }
+
+    .td-slot-col {
+        width: 125px;
+    }
+
+    .td-cell {
+        min-width: 270px;
+        background: #fff;
+
+        overflow-x: hidden;
+        overflow-y: visible;
+    }
+
+    .td-day-cell,
+    .td-slot-cell {
+        background: #f1f5f9;
+        text-align: center;
+    }
+
+    .td-day-name {
+        font-weight: 700;
+        user-select: none;
+        -webkit-user-select: none;
+    }
+
+    .td-day-date {
+        font-size: .78rem;
+        color: #64748b;
+        user-select: none;
+        -webkit-user-select: none;
+    }
+
+    .td-slot-number {
+        user-select: none;
+        -webkit-user-select: none;
+        font-weight: 700;
+    }
+
+    .td-slot-time {
+        user-select: none;
+        -webkit-user-select: none;
+        font-size: .78rem;
+        color: #64748b;
+    }
+
+    .td-cell-body {
+        min-height: 120px;
+        display: flex;
+        flex-direction: column;
+        gap: .35rem;
+        padding: .4rem;
+        border-radius: 10px;
+        border: 1px solid transparent;
+        background: #fff;
+        transition: box-shadow .15s ease;
+
+        overflow-x: hidden;
+        overflow-y: visible;
+        position: relative;
+    }
+
+
+    .td-cell-body > * { min-width: 0; }
+
+    .td-cell-body--empty {
+        justify-content: center;
+        align-items: center;
+        color: #94a3b8;
+        border: 1px dashed #cbd5f5;
+        background: #f8fafc;
+        font-style: italic;
+    }
+
+    .td-cell-body--lec { border-color: #cfe1ff; background: #eef4ff; }
+    .td-cell-body--sem { border-color: #bbf7d0; background: #edfcf2; }
+    .td-cell-body--lab { border-color: #fde68a; background: #fff8e6; }
+    .td-cell-body--prc { border-color: #ddd6fe; background: #f5f3ff; }
+
+    .td-cell-body--brk,
+    .td-cell-body--break {
+        border-color: #e2e8f0;
+        background: #f8fafc;
+        text-transform: uppercase;
+        font-weight: 600;
+        justify-content: center;
+        align-items: center;
+    }
+
+    .td-cell-body--can,
+    .td-cell-body--canceled {
+        border-color: #fecaca;
+        background: #fff1f2;
+        color: #b91c1c;
+        text-decoration: line-through;
+    }
+
+
+    .td-cell-body--res {
+        border-color: #bae6fd;
+        background: #e0f2fe;
+        color: #0369a1;
+    }
+
+    .td-cell-body--locked { box-shadow: inset 4px 0 0 #2563eb; }
+    .td-cell-body--published { box-shadow: 0 0 0 1px #22c55e inset; }
+
+
+    .td-cell--drag-source { outline: 2px dashed #2563eb; outline-offset: -4px; }
+    .td-cell--drop-free { outline: 2px solid #10b981; outline-offset: -4px; }
+    .td-cell--drop-swap { outline: 2px solid #f97316; outline-offset: -4px; }
+    .td-cell--locked { cursor: not-allowed; }
+    .td-cell-body { position: relative; }
+
+    .td-cell-body--draggable {
+        cursor: grab;
+        user-select: none;
+        -webkit-user-select: none;
+    }
+    .td-cell-body--dragging { opacity: .6; cursor: grabbing; }
+    .td-cell-body--drop-free { box-shadow: inset 0 0 0 2px #10b981; }
+    .td-cell-body--drop-swap { box-shadow: inset 0 0 0 2px #f97316; }
+
+    .td-cell-drag-handle {
+        position: absolute;
+        top: 6px;
+        right: 6px;
+        width: 26px;
+        height: 26px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 6px;
+        border: 1px solid #cbd5f5;
+        background: rgba(241, 245, 249, .9);
+        font-size: .85rem;
+        font-weight: 700;
+        color: #1f2937;
+        cursor: grab;
+        user-select: none;
+        -webkit-user-select: none;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, .12);
+    }
+
+    .td-cell-drag-handle:active { cursor: grabbing; }
+
+    .td-cell-title {
+        font-weight: 600;
+        text-transform: uppercase;
+        font-size: .9rem;
+        line-height: 1.2;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+    }
+
+    .td-cell-course {
+        font-weight: 500;
+        font-size: .78rem;
+        margin-top: .1rem;
+    }
+
+    .td-cell-teacher {
+        font-weight: 500;
+        font-size: .85rem;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+
+    .td-cell-meta {
+        font-size: .78rem;
+        color: #475569;
+        display: flex;
+        flex-wrap: wrap;
+        gap: .35rem;
+    }
+    .td-cell-meta span {
+        word-break: break-word;
+        overflow-wrap: anywhere;
+    }
+
+
+    .td-cell-flag {
+        margin-top: .4rem;
+        display: inline-block;
+        padding: .2rem .6rem;
+        font-size: .7rem;
+        font-weight: 600;
+        color: #0369a1;
+        background: rgba(14, 165, 233, .16);
+        border-radius: 999px;
+    }
+
+    .td-cell-warning { font-size: .75rem; color: #b45309; }
+
+    .td-cell-footer {
+        margin-top: auto;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: .4rem;
+    }
+
+    .td-cell-actions { display: flex; justify-content: flex-end; }
+    .td-empty { font-weight: 500; user-select: none; -webkit-user-select: none; }
+
+    .badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-weight: 600;
+        font-size: .75rem;
+        border: 1px solid #e2e8f0;
+        background: #f8fafc;
+        color: #1f2937;
+    }
+    .badge-draft { background: #f1f5f9; color: #475569; }
+    .badge-published { background: #ecfdf5; border-color: #bbf7d0; color: #047857; }
+
+    .week-nav {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        margin-top: 18px;
+        padding: 14px;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 16px;
+    }
+
+    .week-label { color: #475569; font-weight: 600; }
+
+    .editor {
+        margin-top: 14px;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 12px;
+    }
+
+    .editor-title { font-weight: 800; margin-bottom: 8px; }
+
+    .editor-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 12px;
+    }
+
+    .editor-field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 0;
+    }
+
+    .editor-field--wide { grid-column: span 2; }
+
+    .editor-field label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-weight: 600;
+    }
+
+    .editor-code {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: #e2e8f0;
+        color: #1f2937;
+        font-size: .75rem;
+        line-height: 1.2;
+        white-space: nowrap;
+    }
+
+    .editor-grid .select,
+    .editor-grid input.select {
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+    }
+
+    .editor-grid select { text-overflow: ellipsis; }
+
+    .editor-grid select option { white-space: normal; }
+
+    .editor-field--full { grid-column: 1 / -1; }
+
+    .td-room-mode {
+        margin-left: auto;
+        font-size: .75rem;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+
+    .td-room-mode--required { color: #1f2937; }
+    .td-room-mode--optional { color: #6b7280; }
+
+    @@media (max-width: 768px) {
+        .editor-field--wide { grid-column: span 1; }
+        .editor-lock { justify-content: flex-start; }
+    }
+
+    .editor-lock {
+        flex-direction: row;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+    }
+
+    .ck { display: inline-flex; align-items: center; gap: .4rem; }
+
+    .editor-actions { margin-top: 10px; display: flex; gap: 8px; }
+
+
+    .extra-duplicates {
+        margin-top: 16px;
+        padding: 12px;
+        border: 1px dashed #cbd5f5;
+        background: #f8fafc;
+        border-radius: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+    .extra-duplicates-header { font-weight: 700; color: #1d4ed8; }
+    .extra-duplicates-hint { margin: 0; font-size: .85rem; color: #475569; }
+    .extra-duplicates-empty {
+        padding: 8px 12px;
+        border-radius: 8px;
+        background: #e2e8f0;
+        color: #1e293b;
+        font-size: .85rem;
+    }
+    .extra-duplicates-row {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(180px, 1fr)) auto;
+        gap: 8px;
+        align-items: end;
+    }
+    .extra-duplicates-remove {
+        align-self: center;
+        font-size: 1.4rem;
+        line-height: 1;
+        padding: 0 .5rem;
+    }
+    .extra-duplicates-add { align-self: flex-start; }
+
+    .td-edit-btn {
+        width: 30px;
+        height: 30px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        border-radius: 50%;
+    }
+    .td-edit-icon { display: inline-block; font-size: 1rem; line-height: 1; }
+
+
+    .td-slot-alert {
+        margin-top: 6px;
+        border: 1px solid #fcd34d;
+        background: #fffbeb;
+        border-radius: 10px;
+        padding: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        width: 100%;
+        box-sizing: border-box;
+
+        max-width: 100%;
+        overflow-x: hidden;
+        overflow-y: visible;
+    }
+
+    .td-slot-alert-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+    }
+    .td-slot-alert-head > * { min-width: 0; }
+
+    .td-slot-alert-toggle {
+        background: none;
+        border: none;
+        color: #b45309;
+        font-weight: 600;
+        cursor: pointer;
+        padding: 0;
+        text-decoration: underline;
+        line-height: 1.2;
+        display: block;
+        white-space: normal;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+        text-align: left;
+    }
+    .td-slot-alert-toggle:hover { color: #92400e; }
+
+    .td-slot-alert-summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        font-size: .78rem;
+        color: #92400e;
+    }
+
+    .td-slot-alert-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-weight: 600;
+        border: 1px solid #fb923c;
+        white-space: normal;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+    }
+    .td-slot-alert-badge--error { background: #fee2e2; border-color: #f87171; color: #b91c1c; }
+    .td-slot-alert-badge--warn  { background: #fef3c7; border-color: #facc15; color: #92400e; }
+
+    .td-slot-alert-time {
+        font-style: italic;
+        white-space: normal;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+    }
+
+
+    .td-slot-alert-body {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        max-height: none;
+        overflow: visible;
+    }
+
+    .td-slot-issue {
+        border-radius: 8px;
+        padding: 6px 8px;
+        border: 1px solid;
+    }
+    .td-slot-issue--error   { border-color: #f87171; background: #fee2e2; color: #7f1d1d; }
+    .td-slot-issue--warning { border-color: #facc15; background: #fef3c7; color: #78350f; }
+
+    .td-slot-issue-title { font-weight: 600; margin-bottom: 2px; }
+    .td-slot-issue-text  { font-size: .78rem; line-height: 1.3; }
+
+
+    .unrestricted-toggle {
+        margin: 16px 0;
+        padding: 12px;
+        border: 1px solid #fcd34d;
+        background: #fffbeb;
+        border-radius: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+    .unrestricted-check {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 600;
+        color: #92400e;
+    }
+    .unrestricted-check input { width: 20px; height: 20px; }
+    .unrestricted-hint { font-size: .82rem; color: #b45309; }
+
+
+    .td-slot-alert {
+        padding: 12px;
+        gap: 10px;
+        overflow: visible;
+        word-break: break-word;
+    }
+
+    .td-slot-alert-body {
+        max-height: none;
+        overflow: visible;
+        padding-right: 0;
+        gap: 10px;
+    }
+
+    .td-slot-issue {
+        padding: 10px 14px;
+        word-break: break-word;
+    }
+
+    .td-slot-issue-text {
+        word-break: break-word;
+    }
+</style>

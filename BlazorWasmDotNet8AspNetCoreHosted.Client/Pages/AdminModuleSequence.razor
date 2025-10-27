@@ -1,0 +1,471 @@
+@page "/admin/module-sequence"
+@using System.Linq
+@using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
+@inject BlazorWasmDotNet8AspNetCoreHosted.Client.Services.IAdminApi Admin
+
+<PageTitle>Адмін · Послідовності</PageTitle>
+
+<h3 class="mb-3">Послідовності модулів</h3>
+
+@if (!string.IsNullOrWhiteSpace(error))
+{
+    <div class="alert alert-danger">@error</div>
+}
+@if (!string.IsNullOrWhiteSpace(ok))
+{
+    <div class="alert alert-success">@ok</div>
+}
+
+<div class="card p-3 mb-3">
+    <div class="row g-3 align-items-end">
+        <div class="col-12 col-md-6 col-lg-4">
+            <label class="form-label">Курс</label>
+            <select class="form-select" value="@_selectedCourseId" @onchange="OnCourseChanged" disabled="@isLoading">
+                <option value="0">- Оберіть курс -</option>
+                @foreach (var c in courses.OrderBy(c => c.Name))
+                {
+                    var cid = c.Id ?? 0;
+                    <option value="@cid">@c.Name</option>
+                }
+            </select>
+        </div>
+        <div class="col-12 col-md-6 col-lg-4">
+            <label class="form-label">Швидкі дії</label>
+            <div class="d-flex gap-2">
+                <button class="btn btn-outline-secondary" @onclick="RefreshCurrent" disabled="@(isLoading || isCourseLoading || _selectedCourseId == 0)">
+                    <span class="oi oi-loop-circular me-1"></span>Оновити
+                </button>
+                <button class="btn btn-primary" @onclick="SaveAsync" disabled="@(isLoading || isCourseLoading || isSaving || _selectedCourseId == 0)">
+                    @if (isSaving)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                    }
+                    <span>Зберегти</span>
+                </button>
+            </div>
+        </div>
+        <div class="col-12 col-lg-4 text-muted small">
+            <div>Головні модулі викладаються у вказаному порядку.</div>
+            <div>Низькі пріоритети змішуються випадково без повторів два дні поспіль.</div>
+        </div>
+    </div>
+</div>
+
+@if (isLoading)
+{
+    <div class="text-center text-muted py-4">
+        <span class="spinner-border me-2" role="status"></span>Завантаження даних...
+    </div>
+}
+else if (_selectedCourseId == 0)
+{
+    <div class="alert alert-secondary">Оберіть курс, щоб налаштувати його послідовність.</div>
+}
+else
+{
+    var courseModules = CourseModules();
+    if (courseModules.Count == 0)
+    {
+        <div class="alert alert-warning">Для вибраного курсу ще немає модулів.</div>
+    }
+    else if (isCourseLoading)
+    {
+        <div class="text-center text-muted py-4">
+            <span class="spinner-border me-2" role="status"></span>Завантаження конфігурації...
+        </div>
+    }
+    else
+    {
+        <div class="row g-3">
+            <div class="col-12 col-lg-5">
+                <div class="card h-100">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span>Головні модулі</span>
+                        <div class="btn-group btn-group-sm">
+                            <button class="btn btn-outline-secondary" @onclick="ClearMain" disabled="@(mainModules.Count == 0)">Очистити</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        @if (mainModules.Count == 0)
+                        {
+                            <div class="text-muted">Поки що послідовність порожня.</div>
+                        }
+                        else
+                        {
+                            <ul class="list-group list-group-flush">
+                                @for (var i = 0; i < mainModules.Count; i++)
+                                {
+                                    var index = i;
+                                    var mid = mainModules[index];
+                                    var courseName = ModuleCourseName(mid);
+                                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                                        <div class="d-flex align-items-start gap-2">
+                                            <span class="badge bg-light text-muted">@(index + 1)</span>
+                                            <div class="module-label">
+                                                <div class="module-label-title">@ModuleTitle(mid)</div>
+                                                @if (!string.IsNullOrWhiteSpace(courseName))
+                                                {
+                                                    <div class="module-label-course text-muted small">@courseName</div>
+                                                }
+                                            </div>
+                                        </div>
+                                        <div class="btn-group btn-group-sm">
+                                            <button class="btn btn-outline-secondary" title="Вгору" @onclick="@(() => MoveUp(index))" disabled="@(index == 0)">
+                                                <span class="oi oi-chevron-top"></span>
+                                            </button>
+                                            <button class="btn btn-outline-secondary" title="Вниз" @onclick="@(() => MoveDown(index))" disabled="@(index == mainModules.Count - 1)">
+                                                <span class="oi oi-chevron-bottom"></span>
+                                            </button>
+                                            <button class="btn btn-outline-danger" title="Прибрати" @onclick="@(() => RemoveFromMain(index))">
+                                                <span class="oi oi-x"></span>
+                                            </button>
+                                        </div>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                </div>
+            </div>
+            <div class="col-12 col-lg-7">
+                <div class="card h-100">
+                    <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+                        <span>Доступні модулі</span>
+                        <div class="btn-group btn-group-sm">
+                            <button class="btn btn-outline-secondary" @onclick="SelectAllFillers" disabled="@(courseModules.Count == 0)">Всі як низький пріоритет</button>
+                            <button class="btn btn-outline-secondary" @onclick="ClearFillers" disabled="@(fillerIds.Count == 0)">Очистити низькі пріоритети</button>
+                        </div>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-sm table-hover mb-0 align-middle">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th style="width:70px;">Id</th>
+                                        <th>Модуль</th>
+                                        <th style="width:120px;" class="text-end">Головний</th>
+                                        <th style="width:120px;" class="text-center">Низький пріоритет</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var mod in courseModules)
+                                    {
+                                        var mid = mod.Id!.Value;
+                                        var moduleCourse = ModuleCourseName(mid);
+                                        var inMain = mainModules.Contains(mid);
+                                        <tr>
+                                            <td>@mid</td>
+                                            <td>
+                                                <div class="module-label">
+                                                    <div class="module-label-title">@ModuleTitle(mid)</div>
+                                                    @if (!string.IsNullOrWhiteSpace(moduleCourse))
+                                                    {
+                                                        <div class="module-label-course text-muted small">@moduleCourse</div>
+                                                    }
+                                                </div>
+                                            </td>
+                                            <td class="text-end">
+                                                <button class="btn btn-outline-primary btn-sm" @onclick="@(() => AddToMain(mid))" disabled="@inMain">
+                                                    <span class="oi oi-plus me-1"></span>Додати
+                                                </button>
+                                            </td>
+                                            <td class="text-center">
+                                                <input class="form-check-input" type="checkbox"
+                                                       checked="@fillerIds.Contains(mid)"
+                                                       disabled="@inMain"
+                                                       @onchange="@((ChangeEventArgs e) => ToggleFiller(e, mid))" />
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="card-footer text-muted small">
+                        <div>Головних: @mainModules.Count. Низьких пріоритетів: @fillerIds.Count.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    private List<CourseEditDto> courses = new();
+    private List<ModuleEditDto> modules = new();
+    private Dictionary<int, ModuleEditDto> moduleLookup = new();
+    private readonly List<int> mainModules = new();
+    private HashSet<int> fillerIds = new();
+
+    private int _selectedCourseId;
+    private bool isLoading;
+    private bool isCourseLoading;
+    private bool isSaving;
+    private string? ok;
+    private string? error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        isLoading = true;
+        ok = error = null;
+        try
+        {
+            courses = await Admin.GetCourses();
+            modules = await Admin.GetModules();
+            moduleLookup = modules
+                .Where(m => m.Id.HasValue)
+                .ToDictionary(m => m.Id!.Value, m => m);
+
+            _selectedCourseId = courses
+                .Where(c => c.Id.HasValue)
+                .OrderBy(c => c.Name)
+                .Select(c => c.Id!.Value)
+                .FirstOrDefault();
+
+            if (_selectedCourseId > 0)
+            {
+                await LoadSequence(_selectedCourseId);
+            }
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task OnCourseChanged(ChangeEventArgs args)
+    {
+        ok = null;
+        error = null;
+
+        if (int.TryParse(args.Value?.ToString(), out var cid))
+        {
+            _selectedCourseId = cid;
+        }
+        else
+        {
+            _selectedCourseId = 0;
+        }
+
+        mainModules.Clear();
+        fillerIds.Clear();
+
+        if (_selectedCourseId > 0)
+        {
+            await LoadSequence(_selectedCourseId);
+        }
+    }
+
+    private async Task RefreshCurrent()
+    {
+        if (_selectedCourseId <= 0) return;
+        ok = null;
+        error = null;
+        mainModules.Clear();
+        fillerIds.Clear();
+        await LoadSequence(_selectedCourseId);
+    }
+
+    private async Task LoadSequence(int courseId)
+    {
+        isCourseLoading = true;
+        try
+        {
+            var cfg = await Admin.GetModuleSequence(courseId);
+            var allowed = modules
+                .Where(m => m.Id.HasValue && m.CourseId == courseId)
+                .Select(m => m.Id!.Value)
+                .ToHashSet();
+
+            var ordered = new List<int>();
+            var seen = new HashSet<int>();
+
+            if (cfg is not null)
+            {
+                foreach (var mid in cfg.MainSequence.Select(x => x.ModuleId))
+                {
+                    if (allowed.Contains(mid) && seen.Add(mid))
+                    {
+                        ordered.Add(mid);
+                    }
+                }
+
+                fillerIds = cfg.FillerModuleIds
+                    .Where(allowed.Contains)
+                    .ToHashSet();
+            }
+            else
+            {
+                fillerIds.Clear();
+            }
+
+            fillerIds.ExceptWith(ordered);
+            mainModules.Clear();
+            mainModules.AddRange(ordered);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            isCourseLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private List<ModuleEditDto> CourseModules()
+        => modules
+            .Where(m => m.CourseId == _selectedCourseId && m.Id.HasValue)
+            .OrderBy(m => string.IsNullOrWhiteSpace(m.Code) ? m.Title : m.Code)
+            .ThenBy(m => m.Title)
+            .ToList();
+
+    private void AddToMain(int moduleId)
+    {
+        if (!moduleLookup.ContainsKey(moduleId)) return;
+        if (mainModules.Contains(moduleId)) return;
+        ok = null;
+        mainModules.Add(moduleId);
+        fillerIds.Remove(moduleId);
+    }
+
+    private void MoveUp(int index)
+    {
+        if (index <= 0 || index >= mainModules.Count) return;
+        ok = null;
+        (mainModules[index - 1], mainModules[index]) = (mainModules[index], mainModules[index - 1]);
+    }
+
+    private void MoveDown(int index)
+    {
+        if (index < 0 || index >= mainModules.Count - 1) return;
+        ok = null;
+        (mainModules[index], mainModules[index + 1]) = (mainModules[index + 1], mainModules[index]);
+    }
+
+    private void RemoveFromMain(int index)
+    {
+        if (index < 0 || index >= mainModules.Count) return;
+        ok = null;
+        mainModules.RemoveAt(index);
+    }
+
+    private void ToggleFiller(ChangeEventArgs args, int moduleId)
+    {
+        if (mainModules.Contains(moduleId)) return;
+        ok = null;
+        var flag = args.Value is bool b && b;
+        if (flag)
+        {
+            fillerIds.Add(moduleId);
+        }
+        else
+        {
+            fillerIds.Remove(moduleId);
+        }
+    }
+
+    private void SelectAllFillers()
+    {
+        ok = null;
+        fillerIds = CourseModules()
+            .Select(m => m.Id!.Value)
+            .Where(id => !mainModules.Contains(id))
+            .ToHashSet();
+    }
+
+    private void ClearFillers()
+    {
+        ok = null;
+        fillerIds.Clear();
+    }
+
+    private void ClearMain()
+    {
+        ok = null;
+        mainModules.Clear();
+    }
+
+    private string ModuleTitle(int moduleId)
+    {
+        if (moduleLookup.TryGetValue(moduleId, out var module))
+        {
+            var code = string.IsNullOrWhiteSpace(module.Code) ? null : module.Code.Trim();
+            var title = string.IsNullOrWhiteSpace(module.Title) ? null : module.Title.Trim();
+            if (!string.IsNullOrWhiteSpace(code) && !string.IsNullOrWhiteSpace(title))
+            {
+                return $"{code} - {title}";
+            }
+            return title ?? code ?? $"#{moduleId}";
+        }
+        return $"#{moduleId}";
+    }
+
+    private string ModuleCourseName(int moduleId)
+    {
+        if (moduleLookup.TryGetValue(moduleId, out var module))
+        {
+            return CourseName(module.CourseId);
+        }
+        return string.Empty;
+    }
+
+    private string CourseName(int courseId)
+        => courses.FirstOrDefault(c => c.Id == courseId)?.Name ?? $"#{courseId}";
+
+    private async Task SaveAsync()
+    {
+        if (_selectedCourseId <= 0) return;
+
+        isSaving = true;
+        ok = null;
+        error = null;
+
+        try
+        {
+            var payload = new ModuleSequenceSaveRequestDto(
+                _selectedCourseId,
+                new List<int>(mainModules),
+                fillerIds
+                    .Where(id => moduleLookup.TryGetValue(id, out var module) && module.CourseId == _selectedCourseId)
+                    .ToList());
+
+            await Admin.SaveModuleSequence(payload);
+            ok = "Збережено.";
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+}
+
+<style>
+    .table-responsive {
+        max-height: 520px;
+    }
+
+    .module-label {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .module-label-title {
+        font-weight: 600;
+        line-height: 1.2;
+    }
+
+    .module-label-course {
+        font-size: .78rem;
+        margin-top: .1rem;
+    }
+</style>

@@ -1,0 +1,223 @@
+@page "/admin/groups"
+@using System.Net
+@using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
+@using BlazorWasmDotNet8AspNetCoreHosted.Client.Services
+@inject IAdminApi Api
+@inject IJSRuntime JS
+
+<PageTitle>Адмін • Групи</PageTitle>
+
+<h3 class="mb-3">Групи</h3>
+
+@if (!string.IsNullOrWhiteSpace(error))
+{
+    <div class="alert alert-danger">@error</div>
+}
+@if (!string.IsNullOrWhiteSpace(ok))
+{
+    <div class="alert alert-success">@ok</div>
+}
+
+<div class="card p-3 mb-3">
+    <div class="row g-2">
+        <div class="col-12 col-md-3">
+            <label class="form-label">Назва</label>
+            <input class="form-control" @bind="form.Name" />
+        </div>
+        <div class="col-12 col-md-3">
+            <label class="form-label">Студентів</label>
+            <input type="number" min="0" class="form-control" @bind="form.StudentsCount" />
+        </div>
+        <div class="col-12 col-md-3">
+            <label class="form-label">Курс</label>
+            <select class="form-select" @bind="form.CourseId">
+                <option value="0">— Оберіть —</option>
+                @foreach (var c in courses)
+                {
+                    <option value="@c.Id">@c.Name</option>
+                }
+            </select>
+        </div>
+        <div class="col-12 col-md-3 d-grid">
+            <label class="form-label">&nbsp;</label>
+            <button class="btn btn-primary" @onclick="Save">Зберегти</button>
+        </div>
+    </div>
+</div>
+
+<div class="card p-3">
+    <div class="d-flex justify-content-between align-items-center mb-2 gap-2">
+        <div class="text-muted small">Показано: @SortedAndFiltered.Count() з @items.Count</div>
+        <div class="input-group" style="max-width:320px;">
+            <span class="input-group-text">Пошук</span>
+            <input class="form-control" @bind="filter" @bind:event="oninput" placeholder="Id / назва / студенти / курс" />
+        </div>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table table-sm align-middle">
+            <thead>
+                <tr>
+                    <th style="width:80px;" class="sortable-th" role="button"
+                        @onclick="() => ToggleSort(nameof(GroupEditDto.Id))">
+                        Id @HeaderIcon(nameof(GroupEditDto.Id))
+                    </th>
+                    <th class="sortable-th" role="button"
+                        @onclick="() => ToggleSort(nameof(GroupEditDto.Name))">
+                        Назва @HeaderIcon(nameof(GroupEditDto.Name))
+                    </th>
+                    <th class="sortable-th" role="button"
+                        @onclick="() => ToggleSort(nameof(GroupEditDto.StudentsCount))">
+                        Студентів @HeaderIcon(nameof(GroupEditDto.StudentsCount))
+                    </th>
+                    <th class="sortable-th" role="button"
+                        @onclick="() => ToggleSort(CourseField)">
+                        Курс @HeaderIcon(CourseField)
+                    </th>
+                    <th style="width:140px;"></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var g in SortedAndFiltered)
+                {
+                    <tr>
+                        <td>@g.Id</td>
+                        <td>@g.Name</td>
+                        <td>@g.StudentsCount</td>
+                        <td>@NameOfCourse(g.CourseId)</td>
+                        <td class="text-end">
+                            <button class="btn btn-sm btn-outline-primary me-2"
+                                    @onclick="() => form = new(g.Id, g.Name, g.StudentsCount, g.CourseId)">
+                                Редагувати
+                            </button>
+                            <button class="btn btn-sm btn-outline-danger"
+                                    @onclick="() => Delete(g.Id!.Value)">
+                                Видалити
+                            </button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@code {
+    
+    private string? error, ok;
+
+    
+    private List<GroupEditDto> items = new();
+    private GroupEditDto form = new() { Id = null, Name = "", StudentsCount = 0, CourseId = 0 };
+    private List<LookupDto> courses = new();
+
+    
+    private const string CourseField = "CourseName";
+    private string sortField = nameof(GroupEditDto.Name);
+    private bool sortAsc = true;
+    private string? filter;
+
+    protected override async Task OnInitializedAsync() => await Load();
+
+    private async Task Load()
+    {
+        try
+        {
+            error = ok = null;
+            items = await Api.GetGroups();
+            var meta = await Api.GetMeta();
+            courses = meta.Courses;
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private string NameOfCourse(int id) => courses.FirstOrDefault(c => c.Id == id)?.Name ?? $"#{id}";
+
+    private async Task Save()
+    {
+        try
+        {
+            await Api.UpsertGroup(form);
+            await Load();
+            ok = "Збережено.";
+            form = new() { Id = null, Name = "", StudentsCount = 0, CourseId = 0 };
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private async Task Delete(int id)
+    {
+        error = ok = null;
+        try
+        {
+            try
+            {
+                await Api.DeleteGroup(id);
+                await Load();
+                ok = "Видалено.";
+                return;
+            }
+            catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Conflict || ex.Message.Contains("409"))
+            {
+                var sure = await JS.InvokeAsync<bool>("confirm",
+                    "Група використовується у розкладі. Видалити разом із усіма її заняттями?");
+                if (!sure) { error = "Скасовано користувачем."; return; }
+
+                await Api.DeleteGroup(id, force: true);
+                await Load();
+                ok = "Групу та пов’язані заняття видалено.";
+            }
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    
+    private IEnumerable<GroupEditDto> ApplyFilter(IEnumerable<GroupEditDto> seq)
+    {
+        if (string.IsNullOrWhiteSpace(filter)) return seq;
+        var f = filter.Trim();
+
+        return seq.Where(g =>
+            (g.Id?.ToString().Contains(f, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (g.Name?.Contains(f, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            g.StudentsCount.ToString().Contains(f, StringComparison.OrdinalIgnoreCase) ||
+            NameOfCourse(g.CourseId).Contains(f, StringComparison.OrdinalIgnoreCase)
+        );
+    }
+
+    
+    private IEnumerable<GroupEditDto> ApplySort(IEnumerable<GroupEditDto> seq)
+    {
+        return (sortField, sortAsc) switch
+        {
+            (nameof(GroupEditDto.Id), true) => seq.OrderBy(x => x.Id ?? 0),
+            (nameof(GroupEditDto.Id), false) => seq.OrderByDescending(x => x.Id ?? 0),
+
+            (nameof(GroupEditDto.Name), true) => seq.OrderBy(x => x.Name),
+            (nameof(GroupEditDto.Name), false) => seq.OrderByDescending(x => x.Name),
+
+            (nameof(GroupEditDto.StudentsCount), true) => seq.OrderBy(x => x.StudentsCount),
+            (nameof(GroupEditDto.StudentsCount), false) => seq.OrderByDescending(x => x.StudentsCount),
+
+            (CourseField, true) => seq.OrderBy(x => NameOfCourse(x.CourseId)),
+            (CourseField, false) => seq.OrderByDescending(x => NameOfCourse(x.CourseId)),
+
+            _ => seq
+        };
+    }
+
+    
+    private IEnumerable<GroupEditDto> SortedAndFiltered
+        => ApplySort(ApplyFilter(items));
+
+    
+    private void ToggleSort(string field)
+    {
+        if (sortField == field) sortAsc = !sortAsc;
+        else { sortField = field; sortAsc = true; }
+    }
+
+    
+    private MarkupString HeaderIcon(string field)
+        => new(sortField == field ? $"<span class=\"ms-1\">{(sortAsc ? "▲" : "▼")}</span>" : "");
+}

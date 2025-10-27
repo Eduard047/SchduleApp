@@ -1,0 +1,902 @@
+@using System.Globalization
+@using System.Linq
+@using System.Net
+@using System.Text.Json
+@using Microsoft.AspNetCore.Components
+@using BlazorWasmDotNet8AspNetCoreHosted.Client.Services
+@using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
+
+@inject IScheduleApi Api
+@inject ITeacherDraftsApi Drafts
+@inject IJSRuntime JS
+
+@page "/admin/schedule"
+
+<h3 class="mb-3">Редактор розкладу → Чернетки викладачів</h3>
+
+@if (meta is null)
+{
+    <div>Завантаження...</div>
+}
+else
+{
+    <div class="card p-3">
+        <div class="row g-3 align-items-end">
+            <div class="col-12 col-md-4 col-lg-3">
+                <label class="form-label">Дні тижня:</label>
+                <select class="form-select" @bind="_daysPreset">
+                    <option value="@WeekPreset.MonFri">Пн–Пт</option>
+                    <option value="@WeekPreset.MonSat">Пн–Сб</option>
+                    <option value="@WeekPreset.MonSun">Пн–Нд</option>
+                </select>
+            </div>
+            <div class="col-12 col-md-4 col-lg-3">
+                <label class="form-label">Дата тижня:</label>
+                <input type="date"
+                       class="form-control"
+                       value="@_selectedDate.ToString("yyyy-MM-dd")"
+                       @onchange="OnDateChanged" />
+            </div>
+            <div class="col-12 col-md-4 col-lg-3">
+                <label class="form-label">Дії з даними:</label>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-outline-secondary flex-grow-1" @onclick="LoadWeek">
+                        Оновити таблицю
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="mt-3 border rounded-3 p-3 bg-light">
+            <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-3">
+                <div>
+                    <div class="fw-semibold mb-1">Генерація у чернетки</div>
+                    <div class="small text-muted">@GetGenerationRangeDescription()</div>
+                </div>
+                <div class="d-flex flex-wrap gap-2 align-items-stretch">
+                    <select class="form-select flex-grow-1 flex-md-grow-0" style="min-width: 220px;" @bind="_generationScope">
+                        <option value="@GenerationScope.Week">Генерація на тиждень</option>
+                        <option value="@GenerationScope.Month">Генерація на місяць</option>
+                        <option value="@GenerationScope.Course">Генерація на курс</option>
+                    </select>
+                    <button class="btn btn-outline-primary" @onclick="AutoGenDrafts">
+                        Автогенерація (у чернетки)
+                    </button>
+                    <button class="btn btn-outline-danger" @onclick="ClearWeekForCurrent">
+                        Очистити тиждень (чернетки, всі групи)
+                    </button>
+                    <button class="btn btn-danger" @onclick="ClearWeekOfficial">
+                        Очистити тиждень (розклад, всі групи)
+                    </button>
+                </div>
+                @if (_generationScope is GenerationScope.Course)
+                {
+                    <div class="d-flex flex-wrap gap-2 mt-2">
+                        <div class="course-range-picker">
+                            <label class="form-label mb-1">Початок курсу</label>
+                            <input type="date"
+                                   class="form-control"
+                                   value="@FormatDateForInput(_courseFromDate)"
+                                   @onchange="OnCourseFromChanged" />
+                        </div>
+                        <div class="course-range-picker">
+                            <label class="form-label mb-1">Кінець курсу</label>
+                            <input type="date"
+                                   class="form-control"
+                                   value="@FormatDateForInput(_courseToDate)"
+                                   @onchange="OnCourseToChanged" />
+                        </div>
+                    </div>
+                }
+            </div>
+            <div class="small text-muted mt-2">
+                Чернетки оновлюються одразу для всіх груп тижня. Закріплені елементи залишаються без змін.<br />
+                Розклад очищується окремо і не зачіпає закріплені заняття.
+            </div>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(ok))
+        {
+            <div class="alert alert-success mt-3">
+                <div class="d-flex flex-column gap-2">
+                    <div>@ok</div>
+                    @if (okWarnings.Count > 0)
+                    {
+                        <div>
+                            <button type="button"
+                                    class="btn btn-sm btn-outline-dark"
+                                    @onclick="ToggleOkWarnings">
+                                @(okWarningsExpanded
+                                    ? "Сховати попередження"
+                                    : $"Попередження ({okWarnings.Count})")
+                            </button>
+                        </div>
+                        @if (okWarningsExpanded)
+                        {
+                            <ul class="mb-0 mt-1 small">
+                                @foreach (var warn in okWarnings)
+                                {
+                                    <li>@warn</li>
+                                }
+                            </ul>
+                        }
+                    }
+                </div>
+            </div>
+        }
+        @if (!string.IsNullOrWhiteSpace(error))
+        {
+            <div class="alert alert-danger mt-3">@error</div>
+        }
+
+        @if (_currentConflict is not null)
+        {
+            <div class="alert alert-warning mt-3">
+                <div class="d-flex justify-content-between align-items-start gap-2">
+                    <div>
+                        <strong>Остання помилка:</strong> @_currentConflict.Message
+                        <div class="small text-muted">
+                            Тиждень @GetMonday(_selectedDate).ToString("dd.MM.yyyy") – @GetMonday(_selectedDate).AddDays(6).ToString("dd.MM.yyyy").<br />
+                            Збережено @_currentConflict.SavedAt.ToLocalTime().ToString("dd.MM.yyyy HH:mm").
+                        </div>
+                    </div>
+                    <div class="btn-group">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="ToggleConflictDetails">
+                            @_currentConflict.ToggleLabel
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-danger" @onclick="ClearConflictDetails">
+                            Очистити
+                        </button>
+                    </div>
+                </div>
+                @if (_currentConflict.Expanded && _currentConflict.Errors.Count > 0)
+                {
+                    <ul class="mt-2 mb-0">
+                        @foreach (var err in _currentConflict.Errors)
+                        {
+                            <li>@err</li>
+                        }
+                    </ul>
+                }
+                @if (_currentConflict.Expanded && _currentConflict.Warnings.Count > 0)
+                {
+                    <div class="mt-2">
+                        <div class="fw-semibold">Попередження:</div>
+                        <ul class="mb-0">
+                            @foreach (var warn in _currentConflict.Warnings)
+                            {
+                                <li class="text-muted">@warn</li>
+                            }
+                        </ul>
+                    </div>
+                }
+            </div>
+        }
+
+        @{
+            var rows = ViewItems.ToList();
+        }
+
+        <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-2 mt-3">
+            <div class="small text-muted">
+                Показано @rows.Count із @tableItems.Count записів.
+            </div>
+            <div class="input-group" style="max-width:360px;">
+                <span class="input-group-text">Пошук</span>
+                <input class="form-control"
+                       placeholder="Id, група, модуль, викладач, аудиторія..."
+                       @bind="_search"
+                       @bind:event="oninput" />
+            </div>
+        </div>
+
+        <div class="table-responsive mt-3">
+            <table class="table table-sm align-middle">
+                <thead>
+                    <tr>
+                        <th class="sortable-th" role="button" @onclick="() => ToggleSort(SortById)">Id @HeaderIcon(SortById)</th>
+                        <th class="sortable-th" role="button" @onclick="() => ToggleSort(SortByDate)">Дата @HeaderIcon(SortByDate)</th>
+                        <th class="sortable-th" role="button" @onclick="() => ToggleSort(SortByTime)">Час @HeaderIcon(SortByTime)</th>
+                        <th class="sortable-th" role="button" @onclick="() => ToggleSort(SortByGroup)">Група @HeaderIcon(SortByGroup)</th>
+                        <th class="sortable-th" role="button" @onclick="() => ToggleSort(SortByModule)">Модуль @HeaderIcon(SortByModule)</th>
+                        <th class="sortable-th" role="button" @onclick="() => ToggleSort(SortByTeacher)">Викладач @HeaderIcon(SortByTeacher)</th>
+                        <th class="sortable-th" role="button" @onclick="() => ToggleSort(SortByRoom)">Аудиторія @HeaderIcon(SortByRoom)</th>
+                        <th class="sortable-th" role="button" @onclick="() => ToggleSort(SortByLessonType)">Тип @HeaderIcon(SortByLessonType)</th>
+                        <th class="sortable-th" role="button" @onclick="() => ToggleSort(SortByStatus)">Статус @HeaderIcon(SortByStatus)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (rows.Count > 0)
+                    {
+                        foreach (var item in rows)
+                        {
+                            var isBreak = IsBreak(item.LessonTypeId);
+                            var isCanceled = IsCanceled(item.LessonTypeId);
+                            <tr class="@(isBreak ? "table-light" : null)">
+                                <td>@item.Id</td>
+                                <td>@item.Date.ToString("dd.MM.yyyy")</td>
+                                <td>@item.TimeStart-@item.TimeEnd</td>
+                                <td>@(isCanceled ? "-" : item.Group)</td>
+                                <td>
+                                    @if (isBreak || isCanceled)
+                                    {
+                                        <span>-</span>
+                                    }
+                                    else
+                                    {
+                                        var moduleCourse = ModuleCourseCaption(item.ModuleId);
+                                        <div>
+                                            <div>@(item.Module ?? "-")</div>
+                                            @if (!string.IsNullOrWhiteSpace(moduleCourse))
+                                            {
+                                                <div class="text-muted small" style="margin-top:.1rem;">@moduleCourse</div>
+                                            }
+                                        </div>
+                                    }
+                                </td>
+                                <td>@(isBreak || isCanceled ? "-" : (item.Teacher ?? "-"))</td>
+                                <td>@(isCanceled ? "-" : (item.Room ?? "-"))</td>
+                                <td>@item.LessonTypeName</td>
+                                <td>@item.StatusText</td>
+                            </tr>
+                        }
+                    }
+                    else
+                    {
+                        <tr>
+                            <td colspan="9" class="text-center text-muted py-3">
+                                Даних не знайдено для вибраних критеріїв.
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code
+{
+    private MetaResponseDto? meta;
+
+    private int breakTypeId;
+    private int canceledTypeId;
+
+    private DateOnly _selectedDate = DateOnly.FromDateTime(DateTime.Today);
+    private WeekPreset _daysPreset = WeekPreset.MonFri;
+    
+    private GenerationScope _generationScope = GenerationScope.Week;
+    
+    private DateOnly? _calendarFirstDate;
+    private DateOnly? _calendarLastDate;
+    
+    private DateOnly? _courseFromDate;
+    private DateOnly? _courseToDate;
+
+    private string? ok;
+    private string? error;
+    private List<string> okWarnings = new();
+    private bool okWarningsExpanded;
+    private readonly List<TeacherDraftItemDto> draftItems = new();
+    private readonly List<ScheduleItemDto> publishedItems = new();
+    private readonly List<TableItem> tableItems = new();
+
+    private string _search = string.Empty;
+    private string _sortField = SortByDate;
+    private bool _sortAsc = true;
+
+    private ConflictDetails? _currentConflict;
+    private Dictionary<string, ConflictDetails> _conflictStorage = new();
+    private bool _conflictsLoaded;
+    private Dictionary<DateOnly, bool> _calendarLookup = new();
+    private const string ConflictStorageKey = "adminSchedule.conflicts.v1";
+    private static readonly JsonSerializerOptions ConflictJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
+    private const string SortById = nameof(TeacherDraftItemDto.Id);
+    private const string SortByDate = nameof(TeacherDraftItemDto.Date);
+    private const string SortByTime = nameof(TeacherDraftItemDto.TimeStart);
+    private const string SortByGroup = nameof(TeacherDraftItemDto.Group);
+    private const string SortByModule = nameof(TeacherDraftItemDto.Module);
+    private const string SortByTeacher = nameof(TeacherDraftItemDto.Teacher);
+    private const string SortByRoom = nameof(TeacherDraftItemDto.Room);
+    private const string SortByLessonType = nameof(TeacherDraftItemDto.LessonTypeName);
+    private const string SortByStatus = nameof(TeacherDraftItemDto.Status);
+
+    protected override async Task OnInitializedAsync()
+    {
+        meta = await Api.GetMeta();
+
+        if (meta is null)
+        {
+            error = "Не вдалося завантажити метадані.";
+            return;
+        }
+
+        _calendarLookup = meta.Calendar
+            .Select(c => new { Date = DateOnly.ParseExact(c.Date, "yyyy-MM-dd", CultureInfo.InvariantCulture), c.IsWorkingDay })
+            .GroupBy(x => x.Date)
+            .ToDictionary(g => g.Key, g => g.First().IsWorkingDay);
+        if (_calendarLookup.Count > 0)
+        {
+            
+            _calendarFirstDate = _calendarLookup.Keys.Min();
+            _calendarLastDate = _calendarLookup.Keys.Max();
+            
+            _courseFromDate = _calendarFirstDate;
+            _courseToDate = _calendarLastDate;
+        }
+
+        breakTypeId = meta.LessonTypes.FirstOrDefault(x => x.Code == "BREAK")?.Id ?? 0;
+        canceledTypeId = meta.LessonTypes.FirstOrDefault(x => x.Code == "CANCELED")?.Id ?? 0;
+
+        await LoadConflictsAsync();
+        await LoadWeek();
+    }
+
+    private string CurrentWeekKey => GetMonday(_selectedDate).ToString("yyyy-MM-dd");
+
+    private bool IsBreak(int lessonTypeId) => lessonTypeId == breakTypeId;
+    private bool IsCanceled(int lessonTypeId) => lessonTypeId == canceledTypeId;
+
+    
+    private static string FormatDateForInput(DateOnly? value)
+        => value is { } d ? d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : string.Empty;
+
+    private async Task OnCourseFromChanged(ChangeEventArgs e)
+    {
+        if (DateOnly.TryParse(e.Value?.ToString(), out var parsed))
+        {
+            _courseFromDate = parsed;
+            if (_courseToDate is { } to && parsed > to)
+            {
+                _courseToDate = parsed;
+            }
+        }
+        else
+        {
+            _courseFromDate = null;
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task OnCourseToChanged(ChangeEventArgs e)
+    {
+        if (DateOnly.TryParse(e.Value?.ToString(), out var parsed))
+        {
+            _courseToDate = parsed;
+            if (_courseFromDate is { } from && parsed < from)
+            {
+                _courseFromDate = parsed;
+            }
+        }
+        else
+        {
+            _courseToDate = null;
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    
+    private string GetGenerationRangeDescription()
+    {
+        switch (_generationScope)
+        {
+            case GenerationScope.Week:
+                var weekStart = GetMonday(_selectedDate);
+                var weekEnd = weekStart.AddDays(6);
+                return $"Тиждень: {weekStart:dd.MM.yyyy} – {weekEnd:dd.MM.yyyy}";
+            case GenerationScope.Month:
+                var monthStart = new DateOnly(_selectedDate.Year, _selectedDate.Month, 1);
+                var monthEnd = monthStart.AddMonths(1).AddDays(-1);
+                return $"Місяць: {monthStart:dd.MM.yyyy} – {monthEnd:dd.MM.yyyy}";
+            case GenerationScope.Course:
+                if (_courseFromDate is { } cf && _courseToDate is { } ct)
+                {
+                    return $"Курс: {cf:dd.MM.yyyy} – {ct:dd.MM.yyyy}";
+                }
+                return "Курс: межі не визначені";
+            default:
+                var fallbackStart = GetMonday(_selectedDate);
+                var fallbackEnd = fallbackStart.AddDays(6);
+                return $"Тиждень: {fallbackStart:dd.MM.yyyy} – {fallbackEnd:dd.MM.yyyy}";
+        }
+    }
+
+    private void ResetStatus()
+    {
+        ok = error = null;
+        okWarnings.Clear();
+        okWarningsExpanded = false;
+    }
+
+    private void SetOkMessage(string message, IEnumerable<string>? warnings = null)
+    {
+        ok = message;
+        okWarnings = warnings?.Where(w => !string.IsNullOrWhiteSpace(w)).ToList() ?? new List<string>();
+        okWarningsExpanded = false;
+    }
+
+    private void ToggleOkWarnings()
+    {
+        okWarningsExpanded = !okWarningsExpanded;
+    }
+
+    
+    private async Task AutoGenDrafts()
+    {
+        ResetStatus();
+        try
+        {
+            AutoGenResult? res = null;
+            string summary = string.Empty;
+            switch (_generationScope)
+            {
+                case GenerationScope.Week:
+                    var weekStart = GetMonday(_selectedDate);
+                    var weekEnd = weekStart.AddDays(6);
+                    res = await Drafts.AutogenCourse(new AutogenCourseRequest(
+                        From: weekStart,
+                        To: weekEnd,
+                        CourseId: null,
+                        GroupId: null,
+                        TeacherId: null,
+                        AllowOnDaysOff: AllowDaysOffForPreset(),
+                        Days: _daysPreset
+                    ));
+                    summary = $"Автогенерація тижня у чернетки: створено {res.Created}, пропущено {res.Skipped}.";
+                    break;
+                case GenerationScope.Month:
+                    var monthStart = new DateOnly(_selectedDate.Year, _selectedDate.Month, 1);
+                    var monthEnd = monthStart.AddMonths(1).AddDays(-1);
+                    res = await Drafts.AutogenMonth(new AutogenMonthRequest(
+                        MonthStart: monthStart,
+                        CourseId: null,
+                        GroupId: null,
+                        TeacherId: null,
+                        AllowOnDaysOff: AllowDaysOffForPreset(),
+                        Days: _daysPreset
+                    ));
+                    summary = $"Автогенерація місяця у чернетки ({monthStart:dd.MM.yyyy} – {monthEnd:dd.MM.yyyy}): створено {res.Created}, пропущено {res.Skipped}.";
+                    break;
+                case GenerationScope.Course:
+                    if (_courseFromDate is null || _courseToDate is null)
+                    {
+                        error = "Межі курсу не визначені.";
+                        return;
+                    }
+                    var courseFrom = _courseFromDate.Value;
+                    var courseTo = _courseToDate.Value;
+                    res = await Drafts.AutogenCourse(new AutogenCourseRequest(
+                        From: courseFrom,
+                        To: courseTo,
+                        CourseId: null,
+                        GroupId: null,
+                        TeacherId: null,
+                        AllowOnDaysOff: AllowDaysOffForPreset(),
+                        Days: _daysPreset
+                    ));
+                    summary = $"Автогенерація курсу у чернетки ({courseFrom:dd.MM.yyyy} – {courseTo:dd.MM.yyyy}): створено {res.Created}, пропущено {res.Skipped}.";
+                    break;
+                default:
+                    throw new InvalidOperationException("Невідомий режим генерації.");
+            }
+
+            if (res is null)
+            {
+                return;
+            }
+
+            SetOkMessage(summary, res.Warnings);
+
+            await LoadWeek();
+        }
+        catch (ApiErrorException ex)
+        {
+            await HandleApiError(ex);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+    }
+
+    private async Task ClearWeekForCurrent()
+    {
+        ResetStatus();
+        try
+        {
+            var monday = GetMonday(_selectedDate);
+            var sunday = monday.AddDays(6);
+
+            var confirm = await JS.InvokeAsync<bool>("confirm",
+                $"Очистити чернетки тижня {monday:dd.MM.yyyy} – {sunday:dd.MM.yyyy}? (всі групи)");
+            if (!confirm) return;
+
+            var deleted = await Drafts.ClearWeek(new ClearWeekRequest(
+                WeekStart: monday
+            ));
+
+            await LoadWeek();
+            SetOkMessage($"Видалено {deleted} чернеток за поточний тиждень.");
+        }
+        catch (ApiErrorException ex)
+        {
+            await HandleApiError(ex);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+    }
+
+    private async Task ClearWeekOfficial()
+    {
+        ResetStatus();
+        try
+        {
+            var monday = GetMonday(_selectedDate);
+            var sunday = monday.AddDays(6);
+
+            var confirm = await JS.InvokeAsync<bool>("confirm",
+                $"Очистити опублікований розклад за {monday:dd.MM.yyyy} – {sunday:dd.MM.yyyy}? (всі групи)");
+            if (!confirm) return;
+
+            var deleted = await Api.ClearWeek(new ClearWeekRequest(
+                WeekStart: monday
+            ));
+
+            SetOkMessage($"Видалено {deleted} записів з опублікованого розкладу.");
+        }
+        catch (ApiErrorException ex)
+        {
+            await HandleApiError(ex);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+    }
+
+    private async Task HandleApiError(ApiErrorException ex)
+    {
+        var headline = ComposeErrorHeadline(ex);
+        error = headline;
+
+        if (ex.StatusCode == HttpStatusCode.Conflict && (ex.Errors.Count > 0 || ex.Warnings.Count > 0))
+        {
+            var expanded = _conflictStorage.TryGetValue(CurrentWeekKey, out var existing)
+                ? existing.Expanded
+                : true;
+
+            var details = new ConflictDetails
+            {
+                Message = headline,
+                Errors = ex.Errors.ToList(),
+                Warnings = ex.Warnings.ToList(),
+                SavedAt = DateTimeOffset.Now,
+                Expanded = expanded
+            };
+            _conflictStorage[CurrentWeekKey] = details;
+            _currentConflict = details;
+            await PersistConflictsAsync();
+        }
+    }
+
+    private static string ComposeErrorHeadline(ApiErrorException ex)
+    {
+        var parts = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(ex.Message))
+        {
+            parts.Add(ex.Message.Trim());
+        }
+
+        var firstError = ex.Errors.FirstOrDefault(e => !string.IsNullOrWhiteSpace(e));
+        if (!string.IsNullOrWhiteSpace(firstError))
+        {
+            parts.Add(firstError!.Trim());
+        }
+        else
+        {
+            var firstWarning = ex.Warnings.FirstOrDefault(w => !string.IsNullOrWhiteSpace(w));
+            if (!string.IsNullOrWhiteSpace(firstWarning))
+            {
+                parts.Add(firstWarning!.Trim());
+            }
+        }
+
+        if (parts.Count == 0)
+        {
+            return "Невідома помилка.";
+        }
+
+        return parts.Count == 1 ? parts[0] : string.Join(": ", parts.Distinct(StringComparer.Ordinal));
+    }
+
+    private async Task LoadConflictsAsync()
+    {
+        if (_conflictsLoaded) return;
+        _conflictsLoaded = true;
+
+        try
+        {
+            var json = await JS.InvokeAsync<string?>("localStorage.getItem", ConflictStorageKey);
+            if (!string.IsNullOrWhiteSpace(json))
+            {
+                var data = JsonSerializer.Deserialize<Dictionary<string, ConflictDetails>>(json, ConflictJsonOptions);
+                if (data is not null)
+                {
+                    _conflictStorage = data;
+                }
+            }
+        }
+        catch
+        {
+            _conflictStorage = new();
+        }
+    }
+
+    private async Task PersistConflictsAsync()
+    {
+        try
+        {
+            if (_conflictStorage.Count == 0)
+            {
+                await JS.InvokeVoidAsync("localStorage.removeItem", ConflictStorageKey);
+            }
+            else
+            {
+                var json = JsonSerializer.Serialize(_conflictStorage, ConflictJsonOptions);
+                await JS.InvokeVoidAsync("localStorage.setItem", ConflictStorageKey, json);
+            }
+        }
+        catch
+        {
+            
+        }
+    }
+
+    private void SyncCurrentConflict()
+    {
+        _conflictStorage.TryGetValue(CurrentWeekKey, out _currentConflict);
+    }
+
+    private async Task ToggleConflictDetails()
+    {
+        if (_currentConflict is null) return;
+        _currentConflict.Expanded = !_currentConflict.Expanded;
+        _conflictStorage[CurrentWeekKey] = _currentConflict;
+        await PersistConflictsAsync();
+    }
+
+    private async Task ClearConflictDetails()
+    {
+        if (_conflictStorage.Remove(CurrentWeekKey))
+        {
+            _currentConflict = null;
+            await PersistConflictsAsync();
+        }
+    }
+
+    private bool AllowDaysOffForPreset()
+    {
+        return _daysPreset switch
+        {
+            WeekPreset.MonSun => true,
+            WeekPreset.MonSat => true,
+            _ => WeekHasCalendarDayOff(GetMonday(_selectedDate))
+        };
+    }
+
+    private bool WeekHasCalendarDayOff(DateOnly monday)
+    {
+        for (var offset = 0; offset < 7; offset++)
+        {
+            var date = monday.AddDays(offset);
+            if (_calendarLookup.TryGetValue(date, out var isWorkingDay) && !isWorkingDay)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static DateOnly GetMonday(DateOnly d) => d.AddDays(-(((int)d.DayOfWeek + 6) % 7));
+
+    private async Task LoadWeek()
+    {
+        var monday = GetMonday(_selectedDate);
+        var draftData = await Drafts.GetWeek(monday, null);
+        var publishedData = await Api.GetWeek(monday);
+
+        draftItems.Clear();
+        draftItems.AddRange(draftData);
+
+        publishedItems.Clear();
+        publishedItems.AddRange(publishedData);
+
+        tableItems.Clear();
+        tableItems.AddRange(draftItems.Select(CreateTableItemFromDraft));
+        tableItems.AddRange(publishedItems.Select(CreateTableItemFromPublished));
+
+        ok ??= $"Завантажено {draftItems.Count} чернеток та {publishedItems.Count} опублікованих записів.";
+        error = null;
+        SyncCurrentConflict();
+    }
+
+    private async Task OnDateChanged(ChangeEventArgs args)
+    {
+        if (DateOnly.TryParse(args.Value?.ToString(), out var value))
+        {
+            _selectedDate = value;
+            await LoadWeek();
+        }
+    }
+
+    
+    private void ToggleSort(string field)
+    {
+        if (_sortField == field)
+        {
+            _sortAsc = !_sortAsc;
+        }
+        else
+        {
+            _sortField = field;
+            _sortAsc = true;
+        }
+    }
+
+    
+    private MarkupString HeaderIcon(string field)
+        => new(_sortField == field ? $"<span class=\"ms-1\">{(_sortAsc ? "▲" : "▼")}</span>" : "");
+
+    private IEnumerable<TableItem> ViewItems
+        => ApplySort(ApplyFilter(tableItems));
+
+    
+    private IEnumerable<TableItem> ApplyFilter(IEnumerable<TableItem> seq)
+    {
+        if (string.IsNullOrWhiteSpace(_search)) return seq;
+        var needle = _search.Trim();
+
+        return seq.Where(item =>
+            item.Id.ToString().Contains(needle, StringComparison.OrdinalIgnoreCase) ||
+            item.Group.Contains(needle, StringComparison.OrdinalIgnoreCase) ||
+            (item.Module?.Contains(needle, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (item.Teacher?.Contains(needle, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (item.Room?.Contains(needle, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            item.LessonTypeName.Contains(needle, StringComparison.OrdinalIgnoreCase) ||
+            item.StatusText.Contains(needle, StringComparison.OrdinalIgnoreCase) ||
+            item.SourceLabel.Contains(needle, StringComparison.OrdinalIgnoreCase));
+    }
+
+    
+    private IEnumerable<TableItem> ApplySort(IEnumerable<TableItem> seq)
+    {
+        return (_sortField, _sortAsc) switch
+        {
+            (SortById, true) => seq.OrderBy(x => x.Id),
+            (SortById, false) => seq.OrderByDescending(x => x.Id),
+
+            (SortByDate, true) => seq.OrderBy(x => x.Date).ThenBy(x => x.TimeStart),
+            (SortByDate, false) => seq.OrderByDescending(x => x.Date).ThenByDescending(x => x.TimeStart),
+
+            (SortByTime, true) => seq.OrderBy(x => x.TimeStart),
+            (SortByTime, false) => seq.OrderByDescending(x => x.TimeStart),
+
+            (SortByGroup, true) => seq.OrderBy(x => x.Group),
+            (SortByGroup, false) => seq.OrderByDescending(x => x.Group),
+
+            (SortByModule, true) => seq.OrderBy(x => x.Module),
+            (SortByModule, false) => seq.OrderByDescending(x => x.Module),
+
+            (SortByTeacher, true) => seq.OrderBy(x => x.Teacher),
+            (SortByTeacher, false) => seq.OrderByDescending(x => x.Teacher),
+
+            (SortByRoom, true) => seq.OrderBy(x => x.Room),
+            (SortByRoom, false) => seq.OrderByDescending(x => x.Room),
+
+            (SortByLessonType, true) => seq.OrderBy(x => x.LessonTypeName),
+            (SortByLessonType, false) => seq.OrderByDescending(x => x.LessonTypeName),
+
+            (SortByStatus, true) => seq.OrderBy(x => x.StatusText),
+            (SortByStatus, false) => seq.OrderByDescending(x => x.StatusText),
+
+            _ => seq
+        };
+    }
+
+    
+    private TableItem CreateTableItemFromDraft(TeacherDraftItemDto draft)
+        => new(
+            draft.Id,
+            draft.Date,
+            draft.TimeStart,
+            draft.TimeEnd,
+            draft.Group,
+            draft.Module,
+            draft.ModuleId,
+            draft.Teacher,
+            draft.Room,
+            draft.LessonTypeName,
+            draft.LessonTypeId,
+            FormatDraftStatus(draft.Status),
+            "Чернетка"
+        );
+
+    
+    private TableItem CreateTableItemFromPublished(ScheduleItemDto item)
+        => new(
+            item.Id,
+            item.Date,
+            item.TimeStart,
+            item.TimeEnd,
+            item.Group,
+            item.Module,
+            item.ModuleId,
+            item.Teacher,
+            item.Room,
+            item.LessonTypeName,
+            item.LessonTypeId,
+            "Опубліковано (розклад)",
+            "Розклад"
+        );
+
+    
+    private string ModuleCourseCaption(int? moduleId)
+    {
+        if (moduleId is null || meta is null) return string.Empty;
+        var module = meta.Modules.FirstOrDefault(m => m.Id == moduleId.Value);
+        return module is null || string.IsNullOrWhiteSpace(module.CourseName)
+            ? string.Empty
+            : module.CourseName;
+    }
+    private static string FormatDraftStatus(DraftStatusDto status)
+        => status switch
+        {
+            DraftStatusDto.Draft => "Чернетка",
+            DraftStatusDto.Published => "Опубліковано (чернетка)",
+            _ => status.ToString()
+        };
+
+    
+    private enum GenerationScope
+    {
+        Week,
+        Month,
+        Course
+    }
+
+    private sealed class ConflictDetails
+    {
+        public string Message { get; init; } = string.Empty;
+        public List<string> Errors { get; init; } = new();
+        public List<string> Warnings { get; init; } = new();
+        public DateTimeOffset SavedAt { get; init; } = DateTimeOffset.Now;
+        public bool Expanded { get; set; } = true;
+        public string ToggleLabel => Expanded ? "Приховати" : "Розгорнути";
+    }
+
+    private sealed record TableItem(
+        int Id,
+        DateOnly Date,
+        string TimeStart,
+        string TimeEnd,
+        string Group,
+        string? Module,
+        int? ModuleId,
+        string? Teacher,
+        string? Room,
+        string LessonTypeName,
+        int LessonTypeId,
+        string StatusText,
+        string SourceLabel
+    );
+}

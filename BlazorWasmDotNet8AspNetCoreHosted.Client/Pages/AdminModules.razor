@@ -1,0 +1,1160 @@
+@page "/admin/modules"
+@using System.Net.Http.Json
+@using System.Globalization
+@using System.Linq
+@using System.Collections.Generic
+@using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
+@inject BlazorWasmDotNet8AspNetCoreHosted.Client.Services.IAdminApi Admin
+@inject HttpClient Http
+
+
+
+<PageTitle>Модулі</PageTitle>
+
+<h3 class="mb-3">Модулі</h3>
+
+@if (!string.IsNullOrWhiteSpace(error))
+{
+    <div class="alert alert-danger">@error</div>
+}
+@if (!string.IsNullOrWhiteSpace(ok))
+{
+    <div class="alert alert-success">@ok</div>
+}
+
+
+<div class="card p-3 mb-3">
+    <div class="row g-2">
+        <div class="col-12 col-md-3">
+            <label class="form-label">Код</label>
+            <input class="form-control" @bind="form.Code" />
+        </div>
+        <div class="col-12 col-md-5">
+            <label class="form-label">Назва</label>
+            <input class="form-control" @bind="form.Title" />
+        </div>
+        <div class="col-12 col-md-4">
+            <label class="form-label">Курс</label>
+            <select class="form-select" @bind="form.CourseId" @bind:after="OnPrimaryCourseChanged">
+                <option value="0">- Оберіть -</option>
+                @foreach (var c in courses)
+                {
+                    <option value="@c.Id">@c.Name</option>
+                }
+            </select>
+            <div class="form-text">Основний курс, до якого належатиме модуль.</div>
+        </div>
+        <div class="col-12">
+            <label class="form-label">Додаткові курси для копіювання</label>
+            <div class="border rounded p-2" style="max-height:200px;overflow:auto;">
+                @foreach (var c in courses)
+                {
+                    var isPrimary = c.Id == form.CourseId;
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox"
+                               disabled="@isPrimary"
+                               checked="@form.CloneCourseIds.Contains(c.Id)"
+                               @onchange="e => ToggleCloneCourse(c.Id, (bool)e.Value!)" id="course_clone_@c.Id" />
+                        <label class="form-check-label" for="course_clone_@c.Id">@c.Name</label>
+                    </div>
+                }
+            </div>
+            <div class="form-text">Для кожного позначеного курсу буде створено окрему копію модуля.</div>
+        </div>
+
+        
+        <div class="col-12 col-lg-6">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <label class="form-label mb-0">Дозволені корпуси</label>
+                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="SelectAllBuildings">Обрати всі</button>
+            </div>
+            <div class="border rounded p-2" style="max-height:200px;overflow:auto;">
+                @foreach (var b in buildings)
+                {
+                    var bid = b.Id ?? 0;
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox"
+                               checked="@form.AllowedBuildingIds.Contains(bid)"
+                               @onchange="e => ToggleBuilding(bid, (bool)e.Value!)" id="bld_@bid" />
+                        <label class="form-check-label" for="bld_@bid">@b.Name</label>
+                    </div>
+                }
+            </div>
+        </div>
+
+        
+        <div class="col-12 col-lg-6">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <label class="form-label mb-0">Дозволені аудиторії</label>
+                <button type="button" class="btn btn-sm btn-outline-secondary"
+                        @onclick="SelectAllRooms"
+                        disabled="@(!rooms.Any())">Обрати всі</button>
+            </div>
+            @if (!rooms.Any())
+            {
+                <div class="border rounded p-2 bg-light text-muted small">Оберіть корпус, щоб побачити перелік аудиторій.</div>
+            }
+            else
+            {
+                <div class="border rounded p-2" style="max-height:200px;overflow:auto;">
+                    @foreach (var r in rooms)
+                    {
+                        var rid = r.Id ?? 0;
+                        if (rid <= 0)
+                        {
+                            continue;
+                        }
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox"
+                                   checked="@form.AllowedRoomIds.Contains(rid)"
+                                   @onchange="e => Toggle(form.AllowedRoomIds, rid, (bool)e.Value!)" id="room_@rid" />
+                            <label class="form-check-label" for="room_@rid">@r.Name</label>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        
+        <div class="col-12 col-md-6">
+            <label class="form-label">Компетентності</label>
+            <textarea class="form-control" rows="2" @bind="form.Competences"></textarea>
+        </div>
+        <div class="col-12 col-md-6">
+            <label class="form-label">Результати навчання</label>
+            <textarea class="form-control" rows="2" @bind="form.LearningOutcomes"></textarea>
+        </div>
+        <div class="col-12">
+            <label class="form-label">Форма звітності</label>
+            <input class="form-control" @bind="form.ReportingForm" />
+            <div class="form-text">Обсяг кредитів налаштовується безпосередньо у плані модуля.</div>
+        </div>
+        <div class="col-12 d-grid mt-2">
+            <button class="btn btn-primary" @onclick="Save">Зберегти</button>
+        </div>
+    </div>
+</div>
+
+
+<div class="card p-3 mb-3">
+    <div class="d-flex justify-content-between align-items-center mb-2 gap-2">
+        <div class="text-muted small">Відібрано: @SortedAndFiltered.Count() з @items.Count</div>
+        <div class="input-group" style="max-width:320px;">
+            <span class="input-group-text">Пошук</span>
+            <input class="form-control" @bind="filter" @bind:event="oninput" placeholder="Id / код / назва / курс / кредити" />
+        </div>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table table-sm align-middle">
+            <thead>
+                <tr>
+                    <th style="width:80px;" class="sortable-th" role="button"
+                        @onclick="() => ToggleSort(nameof(ModuleEditDto.Id))">
+                        Id @HeaderIcon(nameof(ModuleEditDto.Id))
+                    </th>
+                    <th class="sortable-th" role="button"
+                        @onclick="() => ToggleSort(nameof(ModuleEditDto.Code))">
+                        Код @HeaderIcon(nameof(ModuleEditDto.Code))
+                    </th>
+                    <th class="sortable-th" role="button"
+                        @onclick="() => ToggleSort(nameof(ModuleEditDto.Title))">
+                        Назва @HeaderIcon(nameof(ModuleEditDto.Title))
+                    </th>
+                    <th class="sortable-th" role="button"
+                        @onclick="() => ToggleSort(CourseField)">
+                        Курс @HeaderIcon(CourseField)
+                    </th>
+                    <th class="sortable-th" role="button"
+                        @onclick="() => ToggleSort(nameof(ModuleEditDto.Credits))">
+                        Обсяг кредитів @HeaderIcon(nameof(ModuleEditDto.Credits))
+                    </th>
+                    <th class="sortable-th" role="button"
+                        @onclick="() => ToggleSort(nameof(ModuleEditDto.Competences))">
+                        Компетентності @HeaderIcon(nameof(ModuleEditDto.Competences))
+                    </th>
+                    <th class="sortable-th" role="button"
+                        @onclick="() => ToggleSort(nameof(ModuleEditDto.LearningOutcomes))">
+                        Результати навчання @HeaderIcon(nameof(ModuleEditDto.LearningOutcomes))
+                    </th>
+                    <th class="sortable-th" role="button"
+                        @onclick="() => ToggleSort(nameof(ModuleEditDto.ReportingForm))">
+                        Форма звітності @HeaderIcon(nameof(ModuleEditDto.ReportingForm))
+                    </th>
+                    <th style="width:230px;"></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var m in SortedAndFiltered)
+                {
+                    <tr>
+                        <td>@m.Id</td>
+                        <td>@m.Code</td>
+                        <td>@m.Title</td>
+                        <td>@NameOfCourse(m.CourseId)</td>
+                        <td>@m.Credits</td>
+                        <td><span class="d-inline-block text-truncate" style="max-width:200px;" title="@TruncateText(m.Competences)">@TruncateText(m.Competences)</span></td>
+                        <td><span class="d-inline-block text-truncate" style="max-width:200px;" title="@TruncateText(m.LearningOutcomes)">@TruncateText(m.LearningOutcomes)</span></td>
+                        <td>@m.ReportingForm</td>
+                        <td class="text-end">
+                            
+                            <button class="btn btn-sm btn-outline-secondary me-2" title="План модуля"
+                                    @onclick="() => OpenPlans(m)">
+                                План модуля
+                            </button>
+                            <button class="btn btn-sm btn-outline-primary me-2" @onclick="() => Edit(m)">
+                                Редагувати
+                            </button>
+                            <button class="btn btn-sm btn-outline-danger" @onclick="() => Delete(m.Id!.Value)">
+                                Видалити
+                            </button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+
+@if (plansModuleId is not null)
+{
+    <div class="card p-3">
+        <div class="d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">
+                План модуля (для курсу): <span class="fw-semibold">@plansModuleTitle</span>
+                <small class="text-muted ms-2">(@NameOfCourse(plansCourseId))</small>
+            </h5>
+            <div>
+                <button class="btn btn-sm btn-outline-secondary me-2" @onclick="ClosePlans">Закрити</button>
+                <button class="btn btn-sm btn-primary" @onclick="SavePlans">Зберегти план</button>
+            </div>
+        </div>
+
+        
+        <div class="row g-3 mt-3">
+            <div class="col-12 col-md-4">
+                <label class="form-label">Обсяг кредитів (за планом)</label>
+                <input type="number" min="0" step="0.1" class="form-control" @bind="planCourse.Credits" />
+                <div class="form-text">≈ @Math.Round(planCourse.Credits * 30M) год.</div>
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label">Розкладено (read-only)</label>
+                <input type="number" class="form-control" value="@planCourse.ScheduledHours" disabled />
+                <div class="form-text">Значення підтягнено з фактичного розкладу.</div>
+            </div>
+            <div class="col-12 col-md-4 d-flex align-items-end">
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="planActive" @bind="planCourse.IsActive" />
+                    <label class="form-check-label" for="planActive">Активний</label>
+                </div>
+            </div>
+        </div>
+
+        <div class="small text-muted mt-2">
+            * Зміни набувають чинності після натискання кнопки <b>Зберегти план</b> та повторного перезавантаження модуля.
+        </div>
+
+        <hr />
+        
+        <div class="card module-topics-card p-3 mb-3">
+            <div class="module-topics-header">
+                <h6 class="mb-0">Тематика занять</h6>
+                <p class="small text-muted mb-0">
+                    Використовуйте перелік, щоб деталізувати теми занять та їх навантаження.
+                </p>
+            </div>
+            <div class="row g-3 align-items-end">
+                <div class="col-12 col-lg-2">
+                    <label class="form-label text-nowrap">Номер блока</label>
+                    <input type="number" min="1" class="form-control" @bind="topicForm.BlockNumber" />
+                </div>
+                <div class="col-12 col-lg-7">
+                    <label class="form-label text-nowrap">Назва теми</label>
+                    <input class="form-control" @bind="topicForm.BlockTitle" />
+                    <div class="form-text">Вкажіть назву теми для змістового блока.</div>
+                </div>
+                <div class="col-12 col-lg-3 d-flex align-items-end justify-content-lg-end">
+                    <button type="button" class="btn btn-outline-secondary w-100 w-lg-auto" @onclick="StartNewBlock">Новий блок</button>
+                </div>
+            </div>
+            <div class="row g-3 mt-0">
+                <div class="col-12 col-sm-4 col-lg-2">
+                    <label class="form-label text-nowrap">Номер заняття</label>
+                    <input type="number" min="1" class="form-control" @bind="topicForm.LessonNumber" />
+                </div>
+                <div class="col-12 col-sm-4 col-lg-2">
+                    <label class="form-label text-nowrap">Номер навчального питання</label>
+                    <input type="number" min="1" class="form-control" @bind="topicForm.QuestionNumber" />
+                    <div class="form-text">Код навчального питання: <code>@PreviewTopicCode()</code></div>
+                </div>
+                <div class="col-12 col-sm-4 col-lg-3">
+                    <label class="form-label text-nowrap">Тип заняття</label>
+                    <select class="form-select" @bind="topicForm.LessonTypeId">
+                        @foreach (var lt in lessonTypes)
+                        {
+                            <option value="@lt.Id">@lt.Name</option>
+                        }
+                    </select>
+                </div>
+            </div>
+            <div class="row g-3 mt-0">
+                <div class="col-12 col-sm-4 col-lg-2">
+                    <label class="form-label text-nowrap">Годин аудиторних</label>
+                    <input type="number" min="0" class="form-control" @bind="topicForm.AuditoriumHours" />
+                </div>
+                <div class="col-12 col-sm-4 col-lg-2">
+                    <label class="form-label text-nowrap">Годин самостійних</label>
+                    <input type="number" min="0" class="form-control" @bind="topicForm.SelfStudyHours" />
+                </div>
+            </div>
+            <div class="row g-3 mt-0">
+                <div class="col-12">
+                    <label class="form-label">Навчальні питання (цілі)</label>
+                    <textarea class="form-control" rows="2" @bind="topicForm.Title"></textarea>
+                </div>
+            </div>
+            <div class="module-topics-actions d-flex flex-wrap gap-2 mt-3">
+                <button class="btn btn-sm btn-primary" @onclick="SaveTopic">Зберегти тему</button>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="() => ResetTopicForm(plansModuleId!.Value)">Очистити</button>
+            </div>
+            <div class="table-responsive mt-3">
+                <table class="table table-sm align-middle module-topics-table">
+                    <thead>
+                        <tr>
+                            <th class="text-nowrap">№</th>
+                            <th class="text-nowrap">Код</th>
+                            <th class="text-nowrap">Тип</th>
+                            <th class="text-nowrap">Годин всього</th>
+                            <th class="text-nowrap">Годин аудиторних</th>
+                            <th class="text-nowrap">Годин самостійних</th>
+                            <th class="module-topics-col-title">Навчальні питання (цілі)</th>
+                            <th class="module-topics-col-groups">Заплановані групи</th>
+                            <th class="module-topics-col-groups">Відпрацьовані групи</th>
+                            <th class="module-topics-col-actions"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (moduleTopics.Count == 0)
+                        {
+                            <tr>
+                                <td colspan="10" class="text-muted text-center">Дані відсутні.</td>
+                            </tr>
+                        }
+                        else
+                        {
+                            var currentBlockNumber = -1;
+                            var currentBlockTitle = string.Empty;
+                            var currentBlockCode = string.Empty;
+                            var blockTotal = 0;
+                            var blockAuditorium = 0;
+                            var blockSelfStudy = 0;
+                            for (var i = 0; i < moduleTopics.Count; i++)
+                            {
+                                var topic = moduleTopics[i];
+                                var isNewBlock = topic.BlockNumber != currentBlockNumber;
+                                if (isNewBlock)
+                                {
+                                    currentBlockNumber = topic.BlockNumber;
+                                    currentBlockTitle = topic.BlockTitle ?? string.Empty;
+                                    currentBlockCode = BuildBlockCode(topic);
+                                    blockTotal = 0;
+                                    blockAuditorium = 0;
+                                    blockSelfStudy = 0;
+                                    <tr class="module-topics-block-row">
+                                        <td colspan="10">
+                                            <div class="d-flex flex-column flex-md-row justify-content-between">
+                                                <span>
+                                                    <span class="fw-semibold">@currentBlockCode</span>
+                                                    <span class="ms-2">@(!string.IsNullOrWhiteSpace(currentBlockTitle) ? currentBlockTitle : "Без назви блока")</span>
+                                                </span>
+                                                <span class="text-muted">Блок № @currentBlockNumber</span>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                                blockTotal += topic.TotalHours;
+                                blockAuditorium += topic.AuditoriumHours;
+                                blockSelfStudy += topic.SelfStudyHours;
+
+                                <tr>
+                                    <td>@topic.QuestionNumber</td>
+                                    <td>@topic.TopicCode</td>
+                                    <td>@topic.LessonTypeName</td>
+                                    <td>@topic.TotalHours</td>
+                                    <td>@topic.AuditoriumHours</td>
+                                    <td>@topic.SelfStudyHours</td>
+                                    <td class="module-topics-col-title">
+                                        <span class="topic-text-truncate" title="@topic.Title">@topic.Title</span>
+                                    </td>
+                                    <td class="module-topics-col-groups">
+                                        <span class="topic-text-truncate" title="@string.Join(", ", topic.PlannedGroups)">@string.Join(", ", topic.PlannedGroups)</span>
+                                    </td>
+                                    <td class="module-topics-col-groups">
+                                        <span class="topic-text-truncate" title="@string.Join(", ", topic.CompletedGroups)">@string.Join(", ", topic.CompletedGroups)</span>
+                                    </td>
+                                    <td class="module-topics-col-actions text-end">
+                                        <div class="btn-group btn-group-sm me-1 mb-1 mb-sm-0">
+                                            <button class="btn btn-outline-secondary" @onclick="() => EditTopic(topic)">Редагувати</button>
+                                            <button class="btn btn-outline-danger" @onclick="() => DeleteTopic(topic.Id)">Видалити</button>
+                                        </div>
+                                        <div class="btn-group btn-group-sm">
+                                            <button class="btn btn-outline-secondary" title="Пересунути вище" disabled="@(topic == moduleTopics.First())" @onclick="() => MoveTopic(topic.Id, -1)">&#9650;</button>
+                                            <button class="btn btn-outline-secondary" title="Пересунути нижче" disabled="@(topic == moduleTopics.Last())" @onclick="() => MoveTopic(topic.Id, 1)">&#9660;</button>
+                                        </div>
+                                    </td>
+                                </tr>
+
+                                var isLastInBlock = i + 1 >= moduleTopics.Count || moduleTopics[i + 1].BlockNumber != currentBlockNumber;
+                                if (isLastInBlock)
+                                {
+                                    <tr class="module-topics-total-row">
+                                        <td colspan="3" class="fw-semibold">Всього</td>
+                                        <td class="fw-semibold">@blockTotal</td>
+                                        <td class="fw-semibold">@blockAuditorium</td>
+                                        <td class="fw-semibold">@blockSelfStudy</td>
+                                        <td colspan="4"></td>
+                                    </tr>
+                                }
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    
+    private string? error, ok;
+
+    
+    private List<ModuleEditDto> items = new();
+    private ModuleEditDto form = new()
+    {
+        Id = null,
+        Code = string.Empty,
+        Title = string.Empty,
+        CourseId = 0,
+        AllowedRoomIds = new(),
+        AllowedBuildingIds = new(),
+        CloneCourseIds = new(),
+        Credits = 0,
+        Competences = string.Empty,
+        LearningOutcomes = string.Empty,
+        ReportingForm = string.Empty
+    };
+
+    private List<LookupDto> courses = new();
+    private List<RoomEditDto> rooms = new();
+    private List<RoomEditDto> allRooms = new();
+    private List<BuildingEditDto> buildings = new();
+    private List<IdCodeNameDto> lessonTypes = new();
+
+    
+private int? plansModuleId;
+private int plansCourseId;
+private string plansModuleTitle = "";
+private string plansModuleCode = "";
+private PlanCourseVM planCourse = new();
+
+    
+    private List<ModuleTopicViewDto> moduleTopics = new();
+    
+    private ModuleTopicFormVM topicForm = new();
+
+    
+    private const string CourseField = "CourseName";
+    private string sortField = nameof(ModuleEditDto.Title);
+    private bool sortAsc = true;
+    private string? filter;
+
+    protected override async Task OnInitializedAsync() => await Load();
+
+    
+    private async Task Load()
+    {
+        try
+        {
+            ok = "Дані модулів завантажено.";
+
+            items = await Admin.GetModules();
+
+            var meta = await Admin.GetMeta();
+            courses = meta.Courses ?? new();
+            lessonTypes = meta.LessonTypes ?? new();
+
+            allRooms = await Admin.GetRooms() ?? new();
+            buildings = await Admin.GetBuildings();
+
+            EnsureBuildingsCoverSelectedRooms();
+            UpdateVisibleRooms();
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    
+    private static void Toggle(List<int> list, int id, bool on)
+    {
+        if (on) { if (!list.Contains(id)) list.Add(id); }
+        else list.Remove(id);
+    }
+
+    private void ToggleBuilding(int buildingId, bool on)
+    {
+        if (buildingId <= 0) return;
+        Toggle(form.AllowedBuildingIds, buildingId, on);
+        UpdateVisibleRooms();
+    }
+
+    private void EnsureBuildingsCoverSelectedRooms()
+    {
+        if (form.AllowedRoomIds.Count == 0 || allRooms.Count == 0) return;
+
+        var roomBuildingIds = allRooms
+            .Where(r => r.Id.HasValue && form.AllowedRoomIds.Contains(r.Id.Value))
+            .Select(r => r.BuildingId)
+            .Where(id => id > 0)
+            .Distinct();
+
+        foreach (var bid in roomBuildingIds)
+        {
+            if (!form.AllowedBuildingIds.Contains(bid))
+            {
+                form.AllowedBuildingIds.Add(bid);
+            }
+        }
+    }
+
+    private void UpdateVisibleRooms()
+    {
+        
+        if (form.AllowedBuildingIds.Count == 0)
+        {
+            rooms = new();
+            form.AllowedRoomIds = new();
+            return;
+        }
+
+        var selectedBuildings = form.AllowedBuildingIds.ToHashSet();
+        rooms = allRooms
+            .Where(r => r.Id.HasValue && selectedBuildings.Contains(r.BuildingId))
+            .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var validRoomIds = rooms
+            .Select(r => r.Id!.Value)
+            .ToHashSet();
+
+        form.AllowedRoomIds = form.AllowedRoomIds
+            .Where(validRoomIds.Contains)
+            .Distinct()
+            .ToList();
+    }
+
+    private string NameOfCourse(int id) => courses.FirstOrDefault(c => c.Id == id)?.Name ?? $"#{id}";
+
+    private void Edit(ModuleEditDto m)
+    {
+        form = new(m.Id, m.Code, m.Title, m.CourseId, new List<int>(m.AllowedRoomIds), new List<int>(m.AllowedBuildingIds), m.Credits, m.Competences, m.LearningOutcomes, m.ReportingForm);
+        form.CloneCourseIds = new List<int>(m.CloneCourseIds ?? new());
+        EnsureBuildingsCoverSelectedRooms();
+        UpdateVisibleRooms();
+    }
+
+    
+    private async Task Save()
+    {
+        try
+        {
+            form.CloneCourseIds = form.CloneCourseIds
+                .Where(id => id > 0 && id != form.CourseId)
+                .Distinct()
+                .ToList();
+            await Admin.UpsertModule(form);
+            await Load();
+            ok = "Модуль успішно збережено.";
+            form = new()
+            {
+                Id = null,
+                Code = string.Empty,
+                Title = string.Empty,
+                CourseId = 0,
+                AllowedRoomIds = new(),
+                AllowedBuildingIds = new(),
+                CloneCourseIds = new(),
+                Credits = 0,
+                Competences = string.Empty,
+                LearningOutcomes = string.Empty,
+                ReportingForm = string.Empty
+            };
+            UpdateVisibleRooms();
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    
+    private async Task Delete(int id)
+    {
+        try
+        {
+            await Admin.DeleteModule(id);
+            await Load();
+            ok = "Модуль успішно видалено.";
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    
+    
+    
+    
+    
+    
+    private async Task OpenPlans(ModuleEditDto m)
+    {
+        try
+        {
+            ok = "Дані плану модуля завантажено.";
+
+            plansModuleId = m.Id;
+            plansCourseId = m.CourseId;
+            plansModuleTitle = $"{m.Code} - {m.Title}";
+            plansModuleCode = m.Code ?? string.Empty;
+
+            var dto = await Admin.GetCourseModulePlan(m.Id!.Value);
+            if (dto is null)
+            {
+                var normalizedHours = (int)Math.Round(Math.Max(0m, m.Credits) * 30m);
+                planCourse = new PlanCourseVM
+                {
+                    CourseId = m.CourseId,
+                    TargetHours = normalizedHours,
+                    Credits = m.Credits,
+                    ScheduledHours = 0,
+                    IsActive = true
+                };
+            }
+            else
+            {
+                planCourse = new PlanCourseVM
+                {
+                    CourseId = plansCourseId,
+                    TargetHours = dto.TargetHours,
+                    Credits = dto.TargetHours / 30m,
+                    ScheduledHours = dto.ScheduledHours,
+                    IsActive = dto.IsActive
+                };
+            }
+            await LoadTopics(m.Id!.Value);
+
+            
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+    private void ClosePlans()
+    {
+        plansModuleId = null;
+        plansModuleTitle = "";
+        plansModuleCode = "";
+        planCourse = new();
+        moduleTopics.Clear();
+        ResetTopicForm(0);
+    }
+
+    private async Task SavePlans()
+    {
+        if (plansModuleId is null) return;
+
+        try
+        {
+            var normalizedHours = (int)Math.Round(Math.Max(0m, planCourse.Credits) * 30m);
+            await Admin.UpsertCourseModulePlan(
+                plansModuleId.Value,
+                new SaveCourseModulePlanDto(normalizedHours, planCourse.IsActive)
+            );
+            planCourse.TargetHours = normalizedHours;
+
+
+            ok = "План модуля оновлено.";
+
+            var dto = await Admin.GetCourseModulePlan(plansModuleId.Value);
+            if (dto != null)
+            {
+                planCourse.TargetHours = dto.TargetHours;
+                planCourse.Credits = Math.Round(dto.TargetHours / 30m, 2);
+                planCourse.ScheduledHours = dto.ScheduledHours;
+
+                var moduleRow = items.FirstOrDefault(x => x.Id == plansModuleId);
+                if (moduleRow is not null)
+                    moduleRow.Credits = planCourse.Credits;
+            }
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
+
+    
+
+    private void ResetTopicForm(int moduleId)
+    {
+        var nextOrder = moduleTopics.Count + 1;
+        var defaultLessonType = lessonTypes.FirstOrDefault()?.Id ?? 0;
+        var blockNumber = moduleTopics
+            .Where(t => t.BlockNumber > 0)
+            .Select(t => t.BlockNumber)
+            .DefaultIfEmpty(0)
+            .Max();
+        if (blockNumber <= 0) blockNumber = 1;
+        var blockTitle = moduleTopics
+            .Where(t => t.BlockNumber == blockNumber)
+            .Select(t => t.BlockTitle)
+            .FirstOrDefault(title => !string.IsNullOrWhiteSpace(title)) ?? string.Empty;
+        var nextThemeNumber = NextLessonNumberForBlock(blockNumber);
+        var nextQuestionNumber = NextQuestionNumberForTheme(blockNumber, nextThemeNumber);
+        topicForm = new ModuleTopicFormVM
+        {
+            Id = null,
+            ModuleId = moduleId,
+            Order = nextOrder,
+            BlockNumber = blockNumber,
+            BlockTitle = blockTitle,
+            LessonNumber = nextThemeNumber,
+            QuestionNumber = nextQuestionNumber,
+            LessonTypeId = defaultLessonType,
+            TotalHours = 0,
+            AuditoriumHours = 0,
+            SelfStudyHours = 0,
+            Title = string.Empty
+        };
+    }
+
+    private int NextLessonNumberForBlock(int blockNumber)
+    {
+        if (blockNumber <= 0) blockNumber = 1;
+        return moduleTopics
+            .Where(t => t.BlockNumber == blockNumber)
+            .Select(t => t.LessonNumber)
+            .DefaultIfEmpty(0)
+            .Max() + 1;
+    }
+
+    private int NextQuestionNumberForTheme(int blockNumber, int lessonNumber)
+    {
+        if (blockNumber <= 0) blockNumber = 1;
+        if (lessonNumber <= 0) lessonNumber = 1;
+        return moduleTopics
+            .Where(t => t.BlockNumber == blockNumber && t.LessonNumber == lessonNumber)
+            .Select(t => t.QuestionNumber)
+            .DefaultIfEmpty(0)
+            .Max() + 1;
+    }
+
+    private string PreviewTopicCode()
+    {
+        var segments = new List<string>();
+        if (!string.IsNullOrWhiteSpace(plansModuleCode))
+            segments.Add(plansModuleCode.Trim());
+        if (topicForm.BlockNumber > 0)
+            segments.Add(topicForm.BlockNumber.ToString(CultureInfo.InvariantCulture));
+        if (topicForm.LessonNumber > 0)
+            segments.Add(topicForm.LessonNumber.ToString(CultureInfo.InvariantCulture));
+        if (topicForm.QuestionNumber > 0)
+            segments.Add(topicForm.QuestionNumber.ToString(CultureInfo.InvariantCulture));
+        return segments.Count > 0 ? string.Join(".", segments) : "-";
+    }
+
+    private string BuildBlockCode(ModuleTopicViewDto topic)
+    {
+        if (!string.IsNullOrWhiteSpace(topic.TopicCode))
+        {
+            var parts = topic.TopicCode.Split('.', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 2)
+                return string.Join('.', parts.Take(parts.Length - 1));
+            return topic.TopicCode;
+        }
+
+        var segments = new List<string>();
+        if (!string.IsNullOrWhiteSpace(plansModuleCode))
+            segments.Add(plansModuleCode.Trim());
+        if (topic.BlockNumber > 0)
+            segments.Add(topic.BlockNumber.ToString(CultureInfo.InvariantCulture));
+        return segments.Count > 0 ? string.Join(".", segments) : "-";
+    }
+
+    private void StartNewBlock()
+    {
+        var nextBlock = moduleTopics
+            .Select(t => t.BlockNumber)
+            .DefaultIfEmpty(0)
+            .Max() + 1;
+        if (nextBlock <= 0) nextBlock = 1;
+        topicForm.BlockNumber = nextBlock;
+        topicForm.BlockTitle = string.Empty;
+        topicForm.LessonNumber = 1;
+        topicForm.QuestionNumber = 1;
+    }
+
+    private async Task LoadTopics(int moduleId)
+    {
+        try
+        {
+            moduleTopics = await Admin.GetModuleTopics(moduleId);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            moduleTopics = new List<ModuleTopicViewDto>();
+        }
+        finally
+        {
+            ResetTopicForm(moduleId);
+        }
+    }
+
+    private void EditTopic(ModuleTopicViewDto topic)
+    {
+        topicForm = new ModuleTopicFormVM
+        {
+            Id = topic.Id,
+            ModuleId = topic.ModuleId,
+            Order = topic.Order,
+            BlockNumber = topic.BlockNumber,
+            BlockTitle = topic.BlockTitle,
+            LessonNumber = topic.LessonNumber,
+            QuestionNumber = topic.QuestionNumber,
+            LessonTypeId = topic.LessonTypeId,
+            TotalHours = topic.TotalHours,
+            AuditoriumHours = topic.AuditoriumHours,
+            SelfStudyHours = topic.SelfStudyHours,
+            Title = topic.Title
+        };
+    }
+
+    private async Task SaveTopic()
+    {
+        if (plansModuleId is null) return;
+        try
+        {
+            var moduleId = plansModuleId.Value;
+            var lessonTypeId = topicForm.LessonTypeId != 0 ? topicForm.LessonTypeId : lessonTypes.FirstOrDefault()?.Id ?? 0;
+            if (lessonTypeId == 0)
+            {
+                error = "Не вдалося визначити тип заняття для теми.";
+                return;
+            }
+
+            topicForm.ModuleId = moduleId;
+
+            var sanitizedOrder = topicForm.Order > 0 ? topicForm.Order : moduleTopics.Count + 1;
+            var blockNumber = topicForm.BlockNumber > 0
+                ? topicForm.BlockNumber
+                : moduleTopics.Select(t => t.BlockNumber).DefaultIfEmpty(0).Max() + 1;
+            if (blockNumber <= 0) blockNumber = 1;
+            var blockTitle = topicForm.BlockTitle?.Trim() ?? string.Empty;
+            var lessonNumber = topicForm.LessonNumber > 0
+                ? topicForm.LessonNumber
+                : NextLessonNumberForBlock(blockNumber);
+            var questionNumber = topicForm.QuestionNumber > 0
+                ? topicForm.QuestionNumber
+                : NextQuestionNumberForTheme(blockNumber, lessonNumber);
+            var auditoriumHours = Math.Max(0, topicForm.AuditoriumHours);
+            var selfStudyHours = Math.Max(0, topicForm.SelfStudyHours);
+            var totalHours = Math.Max(0, auditoriumHours + selfStudyHours);
+
+            topicForm.AuditoriumHours = auditoriumHours;
+            topicForm.SelfStudyHours = selfStudyHours;
+            topicForm.TotalHours = totalHours;
+            topicForm.BlockNumber = blockNumber;
+            topicForm.BlockTitle = blockTitle;
+            topicForm.LessonNumber = lessonNumber;
+            topicForm.QuestionNumber = questionNumber;
+
+            var payload = new ModuleTopicDto(
+                topicForm.Id,
+                moduleId,
+                sanitizedOrder,
+                blockNumber,
+                blockTitle,
+                lessonNumber,
+                questionNumber,
+                lessonTypeId,
+                totalHours,
+                auditoriumHours,
+                selfStudyHours,
+                topicForm.Title?.Trim() ?? string.Empty);
+
+            await Admin.UpsertModuleTopic(moduleId, payload);
+            ok = "Тему збережено.";
+            await LoadTopics(moduleId);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+    }
+
+    private async Task DeleteTopic(int topicId)
+    {
+        if (plansModuleId is null) return;
+        try
+        {
+            await Admin.DeleteModuleTopic(plansModuleId.Value, topicId);
+            ok = "Тему видалено.";
+            await LoadTopics(plansModuleId.Value);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+    }
+
+    private async Task MoveTopic(int topicId, int direction)
+    {
+        if (plansModuleId is null) return;
+        var idx = moduleTopics.FindIndex(t => t.Id == topicId);
+        var newIdx = idx + direction;
+        if (idx < 0 || newIdx < 0 || newIdx >= moduleTopics.Count) return;
+
+        (moduleTopics[idx], moduleTopics[newIdx]) = (moduleTopics[newIdx], moduleTopics[idx]);
+        try
+        {
+            await Admin.ReorderModuleTopics(plansModuleId.Value, moduleTopics.Select(t => t.Id).ToList());
+            await LoadTopics(plansModuleId.Value);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+    }
+    private IEnumerable<ModuleEditDto> ApplyFilter(IEnumerable<ModuleEditDto> seq)
+    {
+        if (string.IsNullOrWhiteSpace(filter)) return seq;
+        var f = filter.Trim();
+
+        return seq.Where(m =>
+            (m.Id?.ToString().Contains(f, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (m.Code?.Contains(f, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (m.Title?.Contains(f, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            NameOfCourse(m.CourseId).Contains(f, StringComparison.OrdinalIgnoreCase) ||
+            m.Credits.ToString(CultureInfo.InvariantCulture).Contains(f, StringComparison.OrdinalIgnoreCase) ||
+            (m.Competences?.Contains(f, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (m.LearningOutcomes?.Contains(f, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (m.ReportingForm?.Contains(f, StringComparison.OrdinalIgnoreCase) ?? false)
+        );
+    }
+
+    private IEnumerable<ModuleEditDto> ApplySort(IEnumerable<ModuleEditDto> seq)
+    {
+        return (sortField, sortAsc) switch
+        {
+            (nameof(ModuleEditDto.Id), true) => seq.OrderBy(x => x.Id ?? 0),
+            (nameof(ModuleEditDto.Id), false) => seq.OrderByDescending(x => x.Id ?? 0),
+
+            (nameof(ModuleEditDto.Code), true) => seq.OrderBy(x => x.Code),
+            (nameof(ModuleEditDto.Code), false) => seq.OrderByDescending(x => x.Code),
+
+            (nameof(ModuleEditDto.Title), true) => seq.OrderBy(x => x.Title),
+            (nameof(ModuleEditDto.Title), false) => seq.OrderByDescending(x => x.Title),
+
+            (nameof(ModuleEditDto.Credits), true) => seq.OrderBy(x => x.Credits),
+            (nameof(ModuleEditDto.Credits), false) => seq.OrderByDescending(x => x.Credits),
+
+            (nameof(ModuleEditDto.Competences), true) => seq.OrderBy(x => x.Competences ?? string.Empty),
+            (nameof(ModuleEditDto.Competences), false) => seq.OrderByDescending(x => x.Competences ?? string.Empty),
+
+            (nameof(ModuleEditDto.LearningOutcomes), true) => seq.OrderBy(x => x.LearningOutcomes ?? string.Empty),
+            (nameof(ModuleEditDto.LearningOutcomes), false) => seq.OrderByDescending(x => x.LearningOutcomes ?? string.Empty),
+
+            (nameof(ModuleEditDto.ReportingForm), true) => seq.OrderBy(x => x.ReportingForm ?? string.Empty),
+            (nameof(ModuleEditDto.ReportingForm), false) => seq.OrderByDescending(x => x.ReportingForm ?? string.Empty),
+
+            (CourseField, true) => seq.OrderBy(x => NameOfCourse(x.CourseId)),
+            (CourseField, false) => seq.OrderByDescending(x => NameOfCourse(x.CourseId)),
+
+            _ => seq
+        };
+    }
+
+    private IEnumerable<ModuleEditDto> SortedAndFiltered
+        => ApplySort(ApplyFilter(items));
+
+    private void ToggleSort(string field)
+    {
+        if (sortField == field) sortAsc = !sortAsc;
+        else
+        {
+            sortField = field;
+            sortAsc = true;
+        }
+    }
+
+    private string TruncateText(string? value, int max = 80)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        var trimmed = value.Trim();
+        if (trimmed.Length <= max) return trimmed;
+        var truncated = trimmed.Substring(0, Math.Min(trimmed.Length, max)).TrimEnd();
+        return $"{truncated}…";
+    }
+
+    private MarkupString HeaderIcon(string field)
+    {
+        if (sortField != field) return new MarkupString(string.Empty);
+        var icon = sortAsc ? "&#9650;" : "&#9660;";
+        return new MarkupString($"<span class=\"ms-1\">{icon}</span>");
+    }
+
+    private void SelectAllRooms()
+    {
+        
+        var allIds = rooms
+            .Select(r => r.Id ?? 0)
+            .Where(id => id > 0)
+            .Distinct()
+            .OrderBy(id => id)
+            .ToList();
+        form.AllowedRoomIds = allIds;
+    }
+
+    private void SelectAllBuildings()
+    {
+        
+        var allIds = buildings
+            .Select(b => b.Id ?? 0)
+            .Where(id => id > 0)
+            .Distinct()
+            .OrderBy(id => id)
+            .ToList();
+        form.AllowedBuildingIds = allIds;
+        UpdateVisibleRooms();
+    }
+
+    private void OnPrimaryCourseChanged()
+    {
+        form.CloneCourseIds.RemoveAll(id => id == form.CourseId);
+    }
+
+    private void ToggleCloneCourse(int courseId, bool on)
+    {
+        if (courseId <= 0 || courseId == form.CourseId) return;
+        if (on)
+        {
+            if (!form.CloneCourseIds.Contains(courseId))
+                form.CloneCourseIds.Add(courseId);
+        }
+        else
+        {
+            form.CloneCourseIds.Remove(courseId);
+        }
+    }
+
+
+    
+
+    private sealed class PlanCourseVM
+    {
+        public decimal Credits { get; set; }
+        public int CourseId { get; set; }
+        public int TargetHours { get; set; }
+        public int ScheduledHours { get; set; }
+        public bool IsActive { get; set; }
+    }
+
+
+    
+    private sealed class ModuleTopicFormVM
+    {
+        public int? Id { get; set; }
+        public int ModuleId { get; set; }
+        public int Order { get; set; }
+        public int BlockNumber { get; set; }
+        public string? BlockTitle { get; set; }
+        public int LessonNumber { get; set; }
+        public int QuestionNumber { get; set; }
+        public int LessonTypeId { get; set; }
+        public int TotalHours { get; set; }
+        public int AuditoriumHours { get; set; }
+        public int SelfStudyHours { get; set; }
+        public string? Title { get; set; }
+    }
+}
+
+<style>
+    
+    .sortable-th {
+        cursor: pointer;
+        user-select: none;
+        white-space: nowrap;
+    }
+
+    
+    .module-topics-card {
+        border: 1px solid #e5e7eb;
+        background: #f9fafb;
+        border-radius: 12px;
+    }
+
+    .module-topics-header {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-bottom: 12px;
+    }
+
+    .module-topics-actions .btn {
+        min-width: 140px;
+    }
+
+    .module-topics-table th,
+    .module-topics-table td {
+        vertical-align: middle;
+    }
+
+    .module-topics-col-title .topic-text-truncate {
+        max-width: 260px;
+    }
+
+    .module-topics-col-groups .topic-text-truncate {
+        max-width: 220px;
+    }
+
+    .topic-text-truncate {
+        display: inline-block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        vertical-align: bottom;
+    }
+
+    .module-topics-col-actions {
+        width: 200px;
+        white-space: nowrap;
+    }
+
+    .module-topics-block-row {
+        background-color: #eef2ff;
+        font-weight: 600;
+    }
+
+    .module-topics-block-row td {
+        border-top: none;
+    }
+
+    .module-topics-total-row td {
+        background-color: #f8fafc;
+        font-weight: 600;
+    }
+</style>
+
+
+
+
+
+
+
+
+
+
