@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Infrastructure;
@@ -5,6 +6,7 @@ using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 
 [ApiController]
 [Route("api/[controller]")]
+// Контролер для отримання довідкових даних
 public class MetaController(AppDbContext db) : ControllerBase
 {
     [HttpGet]
@@ -15,21 +17,46 @@ public class MetaController(AppDbContext db) : ControllerBase
         var teachers = await db.Teachers.AsNoTracking().Select(x => new LookupDto(x.Id, x.FullName)).ToListAsync();
         var rooms = await db.Rooms.AsNoTracking().Select(x => new LookupDto(x.Id, x.Name)).ToListAsync();
         var buildings = await db.Buildings.AsNoTracking().Select(x => new LookupDto(x.Id, x.Name)).ToListAsync();
-        var modules = await db.Modules
+        var moduleRows = await db.Modules
             .AsNoTracking()
-            .Select(x => new ModuleMetaDto(
+            .Select(x => new
+            {
                 x.Id,
                 x.Code,
                 x.Title,
                 x.CourseId,
-                x.Course.Name
-            ))
+                CourseName = x.Course.Name,
+                CourseIds = x.ModuleCourses.Select(mc => mc.CourseId).ToList()
+            })
             .ToListAsync();
+
+        var modules = moduleRows
+            .Select(row =>
+            {
+                var courseIds = row.CourseIds ?? new List<int>();
+                if (row.CourseId > 0 && !courseIds.Contains(row.CourseId))
+                {
+                    courseIds.Add(row.CourseId);
+                }
+
+                return new ModuleMetaDto(
+                    row.Id,
+                    row.Code,
+                    row.Title,
+                    row.CourseId,
+                    row.CourseName
+                )
+                {
+                    CourseIds = courseIds
+                };
+            })
+            .ToList();
 
         var lessonTypes = await db.LessonTypes.AsNoTracking().OrderBy(x => x.Id)
             .Select(x => new IdCodeNameDto(x.Id, x.Code, x.Name)
             {
-                RequiresRoom = x.RequiresRoom
+                RequiresRoom = x.RequiresRoom,
+                CssKey = x.CssKey
             }).ToListAsync();
         var lunches = await db.LunchConfigs
             .Select(x => new LunchConfigDto(x.CourseId, x.Start.ToString("HH:mm"), x.End.ToString("HH:mm")))

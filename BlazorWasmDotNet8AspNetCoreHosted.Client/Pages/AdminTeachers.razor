@@ -1,3 +1,4 @@
+@* Сторінка адміністрування викладачів *@
 @page "/admin/teachers"
 @using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
 @inject HttpClient Http
@@ -88,7 +89,14 @@ else
         </div>
 
         <div class="col-md-12">
-            <label class="form-label">Допустимі модулі</label>
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <label class="form-label mb-0">Допустимі модулі</label>
+                <button type="button"
+                        class="btn btn-sm btn-outline-primary"
+                        @onclick="SelectAllModules">
+                    Вибрати всі
+                </button>
+            </div>
             <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-2">
                 @foreach (var m in meta.Modules)
                 {
@@ -300,6 +308,13 @@ else
         {
             edit.ModuleIds.RemoveAll(x => x == moduleId);
         }
+    }
+
+    private void SelectAllModules()
+    {
+        if (edit is null) return;
+        edit.ModuleIds.Clear();
+        edit.ModuleIds.AddRange(meta.Modules.Select(m => m.Id));
     }
 
     

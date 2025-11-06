@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
-using System.Globalization;
 using System.Text.Json;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Application;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Domain.Entities;
@@ -14,6 +13,7 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers;
 
 [ApiController]
 [Route("api/teacher-drafts")]
+// Контролер для керування чернетками викладачів
 public sealed class TeacherDraftsController : ControllerBase
 {
     private readonly AppDbContext _db;
@@ -58,6 +58,9 @@ public sealed class TeacherDraftsController : ControllerBase
 
 
     [HttpGet]
+    /// <summary>
+    /// Повертає перелік чернеток викладачів за тиждень із додатковою інформацією.
+    /// </summary>
     public async Task<IReadOnlyList<TeacherDraftItemDto>> Get(
         [FromQuery] DateOnly weekStart,
         [FromQuery] int? teacherId,
@@ -106,20 +109,19 @@ public sealed class TeacherDraftsController : ControllerBase
 
         return items.Select(i =>
         {
-            var rescheduleInfo = ParseRescheduleBatchKey(i.BatchKey);
-            var groupKey = ResolveTeacherGroupKey(i);
-            var teacherNames = teacherGroups.TryGetValue(groupKey, out var groupedNames)
-                ? groupedNames
-                : new List<string>();
+        var rescheduleInfo = ParseRescheduleBatchKey(i.BatchKey);
+        var groupKey = ResolveTeacherGroupKey(i);
+        var teacherNames = teacherGroups.TryGetValue(groupKey, out var groupedNames)
+            ? groupedNames
+            : new List<string>();
 
             if (teacherNames.Count == 0 && !string.IsNullOrWhiteSpace(i.Teacher?.FullName))
             {
                 teacherNames = new List<string> { i.Teacher!.FullName };
             }
 
-            var teacherLabel = teacherNames.Count > 0 ? string.Join(", ", teacherNames) : (i.Teacher?.FullName ?? "");
-            var topicCode = BuildModuleTopicCode(i.Module, i.ModuleTopic);
-            var topicTitle = i.ModuleTopic?.Title;
+        var teacherLabel = teacherNames.Count > 0 ? string.Join(", ", teacherNames) : (i.Teacher?.FullName ?? "");
+        var topicCode = BuildModuleTopicCode(i.ModuleTopic);
 
             var requiresRoom = i.LessonType.RequiresRoom;
 
@@ -134,8 +136,7 @@ public sealed class TeacherDraftsController : ControllerBase
             Module: i.Module.Title,
             ModuleId: i.ModuleId,
             TopicCode: topicCode,
-            TopicTitle: topicTitle,
-            ModuleTopicId: i.ModuleTopicId,
+        ModuleTopicId: i.ModuleTopicId,
             Teacher: teacherLabel,
             TeacherId: i.TeacherId,
             Room: requiresRoom && i.Room is not null ? i.Room.Name : "",
@@ -157,6 +158,9 @@ public sealed class TeacherDraftsController : ControllerBase
     }
 
     [HttpGet("week")]
+    /// <summary>
+    /// Додає коротку кінцеву точку, що делегує основному методу отримання даних.
+    /// </summary>
     public Task<IReadOnlyList<TeacherDraftItemDto>> GetWeekAlias(
         [FromQuery] DateOnly weekStart,
         [FromQuery] int? teacherId,
@@ -165,6 +169,9 @@ public sealed class TeacherDraftsController : ControllerBase
         => Get(weekStart, teacherId, groupId, roomId);
 
     [HttpDelete("{id:int}")]
+    /// <summary>
+    /// Видаляє чернетку, якщо запис існує та не заблокований.
+    /// </summary>
     public async Task<IActionResult> Delete(int id)
     {
         var item = await _db.TeacherDraftItems.FirstOrDefaultAsync(x => x.Id == id);
@@ -189,31 +196,20 @@ public sealed class TeacherDraftsController : ControllerBase
 
         return (true, null);
     }
-
-    private static string? BuildModuleTopicCode(Module module, ModuleTopic? topic)
+    /// <summary>
+    /// Нормалізує код теми модуля перед збереженням.
+    /// </summary>
+    private static string? BuildModuleTopicCode(ModuleTopic? topic)
     {
         if (topic is null) return null;
-        var segments = new List<string>();
-        if (!string.IsNullOrWhiteSpace(module.Code))
-            segments.Add(module.Code.Trim());
-        if (topic.BlockNumber > 0)
-            segments.Add(topic.BlockNumber.ToString(CultureInfo.InvariantCulture));
-        if (topic.LessonNumber > 0)
-        {
-            segments.Add(topic.LessonNumber.ToString(CultureInfo.InvariantCulture));
-        }
-        else if (topic.Order > 0)
-        {
-            segments.Add(topic.Order.ToString(CultureInfo.InvariantCulture));
-        }
-        if (topic.QuestionNumber > 0)
-            segments.Add(topic.QuestionNumber.ToString(CultureInfo.InvariantCulture));
-
-        return segments.Count > 0 ? string.Join(".", segments) : null;
+        return string.IsNullOrWhiteSpace(topic.TopicCode) ? null : topic.TopicCode.Trim();
     }
 
 
     [HttpPost("upsert")]
+    /// <summary>
+    /// Валідує й створює або оновлює чернетку викладача, повертає її ідентифікатор.
+    /// </summary>
     public async Task<ActionResult<int>> Upsert([FromBody] DraftUpsertRequest r)
     {
         var validation = await _rules.ValidateDraftAsync(r);
@@ -286,6 +282,9 @@ public sealed class TeacherDraftsController : ControllerBase
     }
 
     [HttpPost("clear-week")]
+    /// <summary>
+    /// Очищає незаблоковані чернетки за вказаний тиждень із можливими додатковими фільтрами.
+    /// </summary>
     public async Task<ActionResult<ClearWeekResult>> ClearWeek([FromBody] ClearWeekRequest r)
     {
         var start = r.WeekStart;
@@ -301,10 +300,16 @@ public sealed class TeacherDraftsController : ControllerBase
 
 
     [HttpPost("autogen/week")]
+    /// <summary>
+    /// Викликає автогенерацію чернеток для одного тижня.
+    /// </summary>
     public Task<ActionResult<AutoGenResult>> DraftAutoGenWeek([FromBody] DraftAutoGenRequest r)
         => DraftAutoGen(r);
 
     [HttpPost("autogen/month")]
+    /// <summary>
+    /// Автоматично генерує чернетки для кожного тижня в межах місяця.
+    /// </summary>
     public async Task<ActionResult<AutoGenResult>> AutogenMonth([FromBody] AutogenMonthRequest r)
     {
         var monthStart = r.MonthStart;
@@ -334,6 +339,9 @@ public sealed class TeacherDraftsController : ControllerBase
     }
 
     [HttpPost("autogen/course")]
+    /// <summary>
+    /// Генерує чернетки для курсу в заданому діапазоні тижнів.
+    /// </summary>
     public async Task<ActionResult<AutoGenResult>> AutogenCourse([FromBody] AutogenCourseRequest r)
     {
         var monday = ToMonday(r.From);
@@ -361,11 +369,16 @@ public sealed class TeacherDraftsController : ControllerBase
 
         return Ok(new AutoGenResult(created, skipped, warnings));
     }
-
+    /// <summary>
+    /// Повертає понеділок тижня, до якого належить передана дата.
+    /// </summary>
     private static DateOnly ToMonday(DateOnly d)
         => d.AddDays(-(((int)d.DayOfWeek + 6) % 7));
 
     [HttpPost("autogen")]
+    /// <summary>
+    /// Створює чернетки на основі правил і доступних даних для заданого тижня.
+    /// </summary>
     public async Task<ActionResult<AutoGenResult>> DraftAutoGen([FromBody] DraftAutoGenRequest r)
     {
         var types = await _db.LessonTypes.AsNoTracking().ToListAsync();
@@ -527,7 +540,7 @@ public sealed class TeacherDraftsController : ControllerBase
         var topicsRaw = await _db.ModuleTopics
             .Where(t => moduleIdsForPlans.Contains(t.ModuleId))
             .OrderBy(t => t.Order)
-            .ThenBy(t => t.LessonNumber)
+            .ThenBy(t => t.TopicCode)
             .ToListAsync();
         var topicsByModule = topicsRaw
             .GroupBy(t => t.ModuleId)
@@ -563,6 +576,7 @@ public sealed class TeacherDraftsController : ControllerBase
         }
         var topicCursor = new Dictionary<(int GroupId, int ModuleId), int>();
         var topicsExhaustedNotified = new HashSet<(int GroupId, int ModuleId)>();
+        var missingModulesNotified = new HashSet<int>();
 
         int GetTopicUsageLimit(ModuleTopic topic)
             => topicUsageLimitById.TryGetValue(topic.Id, out var limit) ? limit : Math.Max(0, topic.AuditoriumHours);
@@ -870,9 +884,9 @@ public sealed class TeacherDraftsController : ControllerBase
 
                 if (glunch is not null)
                 {
-                    var anyModuleId = await _db.Modules
-                        .Where(m => m.CourseId == grp.CourseId)
-                        .Select(m => m.Id)
+                    var anyModuleId = await _db.ModuleCourses
+                        .Where(mc => mc.CourseId == grp.CourseId)
+                        .Select(mc => mc.ModuleId)
                         .FirstOrDefaultAsync();
                     if (anyModuleId != 0)
                     {
@@ -992,8 +1006,42 @@ public sealed class TeacherDraftsController : ControllerBase
 
                 var remainingKey = (grp.Id, moduleId);
                 bool isFiller = fillerLookup.Contains(moduleId);
+                string? moduleTitle = null;
+
+                async Task<bool> EnsureModuleTitleAsync()
+                {
+                    if (moduleTitle is not null)
+                    {
+                        return true;
+                    }
+
+                    moduleTitle = await _db.Modules
+                        .Where(m => m.Id == moduleId)
+                        .Select(m => m.Title)
+                        .FirstOrDefaultAsync();
+
+                    if (moduleTitle is null)
+                    {
+                        if (missingModulesNotified.Add(moduleId))
+                        {
+                            warnings.Add($"В базі даних відсутній модуль із ідентифікатором {moduleId}. Автогенерацію для нього пропущено.");
+                        }
+
+                        skipped++;
+                        return false;
+                    }
+
+                    return true;
+                }
+
+                string ModuleLabel() => string.IsNullOrWhiteSpace(moduleTitle) ? $"#{moduleId}" : moduleTitle!;
 
                 if (!isFiller && RemainingFor(grp.Id, moduleId) <= 0)
+                {
+                    return false;
+                }
+
+                if (!await EnsureModuleTitleAsync())
                 {
                     return false;
                 }
@@ -1007,8 +1055,7 @@ public sealed class TeacherDraftsController : ControllerBase
 
                     if (topicsExhaustedNotified.Add(remainingKey))
                     {
-                        var modTitle = await _db.Modules.Where(m => m.Id == moduleId).Select(m => m.Title).FirstAsync();
-                        warnings.Add($"Для модуля <{modTitle}> у групи {grp.Name} вичерпано теми. Пропустили розкладення.");
+                        warnings.Add($"Для модуля <{ModuleLabel()}> у групи {grp.Name} вичерпано теми. Пропустили розкладення.");
                     }
 
                     return false;
@@ -1027,8 +1074,7 @@ public sealed class TeacherDraftsController : ControllerBase
                     .ToList();
                 if (tids.Count == 0)
                 {
-                    var modTitle = await _db.Modules.Where(m => m.Id == moduleId).Select(m => m.Title).FirstAsync();
-                    warnings.Add($"Не знайдено викладачів для модуля <{modTitle}> (група {grp.Name}).");
+                    warnings.Add($"Не знайдено викладачів для модуля <{ModuleLabel()}> (група {grp.Name}).");
                     skipped++;
                     return false;
                 }
@@ -1069,8 +1115,7 @@ public sealed class TeacherDraftsController : ControllerBase
                         {
                             if (candidateRooms.Count == 0)
                             {
-                                var modTitle = await _db.Modules.Where(m => m.Id == moduleId).Select(m => m.Title).FirstAsync();
-                                warnings.Add($"Не знайдено аудиторій для модуля <{modTitle}> (група {grp.Name}).");
+                                warnings.Add($"Не знайдено аудиторій для модуля <{ModuleLabel()}> (група {grp.Name}).");
                                 skipped++;
                                 return false;
                             }
@@ -1303,6 +1348,9 @@ public sealed class TeacherDraftsController : ControllerBase
 
 
     [HttpPost("approve-week")]
+    /// <summary>
+    /// Позначає чернетки викладача за тиждень як затверджені.
+    /// </summary>
     public async Task<IActionResult> ApproveWeek([FromBody] ApproveWeekRequest r)
     {
         var start = r.WeekStart;
@@ -1319,6 +1367,9 @@ public sealed class TeacherDraftsController : ControllerBase
     }
 
     [HttpPost("publish-week")]
+    /// <summary>
+    /// Публікує затверджені чернетки у розкладі та повертає статистику операції.
+    /// </summary>
     public async Task<ActionResult<PublishWeekResults>> PublishWeek([FromBody] PublishWeekRequest r)
     {
         var start = r.WeekStart;
@@ -1423,6 +1474,9 @@ public sealed class TeacherDraftsController : ControllerBase
         await tx.CommitAsync();
         return Ok(new PublishWeekResults(created, skipped, warnings));
     }
+    /// <summary>
+    /// Перераховує агреговані плани та навантаження після змін у чернетках.
+    /// </summary>
 
 
     private async Task RecalcAggregatesAsync(

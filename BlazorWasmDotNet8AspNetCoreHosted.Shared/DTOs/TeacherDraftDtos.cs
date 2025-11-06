@@ -1,3 +1,4 @@
+// DTO структури для чернеток викладачів
 namespace BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 
 public enum DraftStatusDto { Draft = 0, Published = 1 }
@@ -13,7 +14,6 @@ public record TeacherDraftItemDto(
     string Module,
     int ModuleId,
     string? TopicCode,
-    string? TopicTitle,
     int? ModuleTopicId,
     string Teacher,
     int? TeacherId,
@@ -30,7 +30,8 @@ public record TeacherDraftItemDto(
     bool IsRescheduled = false,
     int? RescheduledFromLessonTypeId = null,
     string? BatchKey = null,
-    List<string>? TeacherNames = null
+    List<string>? TeacherNames = null,
+    string? LessonTypeCss = null
 );
 
 public record DraftUpsertRequest(

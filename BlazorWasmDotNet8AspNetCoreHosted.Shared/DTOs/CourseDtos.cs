@@ -1,3 +1,4 @@
+// DTO для редагування інформації про курс
 namespace BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 
 public record class CourseEditDto

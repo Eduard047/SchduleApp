@@ -12,6 +12,7 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+// Контролер для управління основним розкладом
 public class ScheduleController : ControllerBase
 {
     private readonly AppDbContext _db;

@@ -8,6 +8,7 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Admin;
 
 [ApiController]
 [Route("api/admin/buildings")]
+// Контролер адміністратора для будівель і переміщень
 public class AdminBuildingsController(AppDbContext db) : ControllerBase
 {
     

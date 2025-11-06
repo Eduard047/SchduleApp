@@ -1,5 +1,6 @@
 using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 
+// Контракт клієнта для роботи з чернетками викладачів
 public interface ITeacherDraftsApi
 {
     Task<List<TeacherDraftItemDto>> GetWeek(DateOnly weekStart, int? teacherId);

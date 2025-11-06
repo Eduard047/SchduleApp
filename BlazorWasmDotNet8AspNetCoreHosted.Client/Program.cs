@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
 using BlazorWasmDotNet8AspNetCoreHosted.Client;
 using BlazorWasmDotNet8AspNetCoreHosted.Client.Services;
 
+// Точка входу клієнтського застосунку
 var builder = WebAssemblyHostBuilder.CreateDefault(args);
 builder.RootComponents.Add<App>("#app");
 builder.RootComponents.Add<HeadOutlet>("head::after");

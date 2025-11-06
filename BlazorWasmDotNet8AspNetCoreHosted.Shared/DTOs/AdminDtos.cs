@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 
+// DTO для адміністративних операцій і форм редагування
 namespace BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 
 public record class GroupEditDto

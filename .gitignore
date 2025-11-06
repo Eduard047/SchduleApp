@@ -1,17 +1,48 @@
 # Build outputs
-bin/
-obj/
+[Bb]in/
+[Oo]bj/
 
-# User-specific files
-*.user
-*.suo
-*.userprefs
-
-# VS Code
+# Visual Studio workspace
+.vs/
 .vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
 
-# ASP.NET generated
-wwwroot/dist/
+# Build tools
+*.log
+*.tlog
+*.cache
+*.ilk
+*.tmp
+*.dbmdl
+*.pdb
+*.obj
 
-# Others
-*.swp
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Resharper
+_ReSharper*/
+*.[Rr]e[Ss]harper
+
+# Rider
+.idea/
+
+# DotCover
+*.dotCover
+
+# VS Code local history
+.history/
+
+# OS files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store

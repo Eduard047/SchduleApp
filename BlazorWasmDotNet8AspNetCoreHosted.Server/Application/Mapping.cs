@@ -4,6 +4,7 @@ using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 
 namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Application;
 
+// Допоміжні перетворення доменних сутностей у DTO
 public static class Mapping
 {
     private static readonly CultureInfo Uk = new("uk-UA");

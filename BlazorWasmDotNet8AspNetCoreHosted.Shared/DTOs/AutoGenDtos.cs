@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 
+// DTO для автогенерації розкладу
 namespace BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 
 public enum WeekPreset

@@ -8,6 +8,7 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Admin;
 
 [ApiController]
 [Route("api/admin/groups")]
+// Контролер адміністратора для груп
 public class AdminGroupsController(AppDbContext db) : ControllerBase
 {
     [HttpGet]

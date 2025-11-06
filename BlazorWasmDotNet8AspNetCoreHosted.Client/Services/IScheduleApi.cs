@@ -2,6 +2,7 @@ using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 
 namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services;
 
+// Контракт клієнта для доступу до даних розкладу
 public interface IScheduleApi
 {
     Task<MetaResponseDto> GetMeta(DateOnly? weekStart = null);

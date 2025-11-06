@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Application;
 
+// Сервіс валідації правил розкладу
 public sealed class RulesService(AppDbContext db)
 {
     public async Task<(List<string> errors, List<string> warnings)> ValidateUpsertAsync(UpsertScheduleItemRequest r)
