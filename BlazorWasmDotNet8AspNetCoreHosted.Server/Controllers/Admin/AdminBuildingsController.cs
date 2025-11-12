@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Domain.Entities;
@@ -64,6 +65,7 @@ public class AdminBuildingsController(AppDbContext db) : ControllerBase
     }
 
     [HttpDelete("{id:int}")]
+    [RequireDeletionConfirmation("корпус")]
     public async Task<IActionResult> Delete(int id)
     {
         
@@ -112,6 +114,7 @@ public class AdminBuildingsController(AppDbContext db) : ControllerBase
     }
 
     [HttpPost("travel/delete")]
+    [RequireDeletionConfirmation("маршрут між корпусами")]
     public async Task<IActionResult> DeleteTravel(BuildingTravelEditDto dto)
     {
         var (fromId, toId) = Canon(dto.FromBuildingId, dto.ToBuildingId);

@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Domain.Entities;
 using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
@@ -41,6 +42,7 @@ public class AdminConfigController(AppDbContext db) : ControllerBase
     }
 
     [HttpDelete("lunch/{id:int}")]
+    [RequireDeletionConfirmation("налаштування обідньої перерви")]
     public async Task<IActionResult> LunchDelete(int id)
     {
         var rows = await db.LunchConfigs.Where(x => x.Id == id).ExecuteDeleteAsync();
@@ -75,6 +77,7 @@ public class AdminConfigController(AppDbContext db) : ControllerBase
     }
 
     [HttpDelete("calendar/{id:int}")]
+    [RequireDeletionConfirmation("календарне виключення")]
     public async Task<IActionResult> CalendarDelete(int id)
     {
         var rows = await db.CalendarExceptions.Where(x => x.Id == id).ExecuteDeleteAsync();
@@ -232,6 +235,7 @@ public class AdminConfigController(AppDbContext db) : ControllerBase
 
     
     [HttpDelete("slots/clear")]
+    [RequireDeletionConfirmation("слоти розкладу", TargetArgumentName = nameof(courseId))]
     public async Task<IActionResult> ClearSlots([FromQuery] int? courseId)
     {
         if (courseId is int cid && await db.Courses.FindAsync(cid) is null)

@@ -1,7 +1,8 @@
-@* Сторінка адміністрування аудиторій *@
+﻿@* Сторінка адміністрування аудиторій *@
 @page "/admin/rooms"
 @using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
 @inject BlazorWasmDotNet8AspNetCoreHosted.Client.Services.IAdminApi Admin
+@inject IJSRuntime JS
 
 <PageTitle>Адмін • Аудиторії</PageTitle>
 
@@ -140,18 +141,23 @@
         catch (Exception ex) { error = ex.Message; }
     }
 
-    private async Task Delete(int id)
-    {
-        try
-        {
-            await Admin.DeleteRoom(id);
-            await Load();
-            ok = "Видалено.";
-        }
-        catch (Exception ex) { error = ex.Message; }
-    }
+    private async Task Delete(int id)
+    {
+        try
+        {
+            var room = items.FirstOrDefault(r => r.Id == id);
+            var caption = room is null ? $"#{id}" : $"{room.Name} (#{id})";
+            var confirmed = await JS.InvokeAsync<bool>("confirm", $"Видалити аудиторію {caption}? Дію не можна скасувати.");
+            if (!confirmed) return;
+
+            await Admin.DeleteRoom(id);
+            await Load();
+            ok = "Видалено.";
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
 
-    
     private IEnumerable<RoomEditDto> ApplyFilter(IEnumerable<RoomEditDto> seq)
     {
         if (string.IsNullOrWhiteSpace(filter)) return seq;

@@ -1,4 +1,4 @@
-@* Сторінка адміністрування модулів *@
+﻿@* Сторінка адміністрування модулів *@
 @page "/admin/modules"
 @using System.Net.Http.Json
 @using System.Globalization
@@ -7,6 +7,7 @@
 @using System.Text.RegularExpressions
 @using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
 @inject BlazorWasmDotNet8AspNetCoreHosted.Client.Services.IAdminApi Admin
+@inject IJSRuntime JS
 @inject HttpClient Http
 
 
@@ -330,7 +331,7 @@
                         {
 
                             foreach (var topic in moduleTopics)
-
+                        
                             {
 
                                 <tr>
@@ -701,16 +702,37 @@ private PlanCourseVM planCourse = new();
 
     
     private async Task Delete(int id)
+
     {
+
         try
+
         {
+            var module = items.FirstOrDefault(m => m.Id == id);
+
+            var caption = module is null ? $"#{id}" : $"{module.Code} — {module.Title}";
+
+            var confirmed = await JS.InvokeAsync<bool>("confirm", $"Видалити модуль {caption}? Дію не можна скасувати.");
+
+            if (!confirmed) return;
+
+
+
             await Admin.DeleteModule(id);
+
             await Load();
+
             ok = "Модуль успішно видалено.";
+
         }
+
         catch (Exception ex) { error = ex.Message; }
+
     }
 
+
+
+    ///
     /// <summary>
     /// Відкриває панель планів для обраного модуля та завантажує дані.
     /// </summary>
@@ -1106,19 +1128,46 @@ private PlanCourseVM planCourse = new();
     /// </summary>
 
     private async Task DeleteTopic(int topicId)
+
     {
+
         if (plansModuleId is null) return;
+
         try
+
         {
+
+            var topic = moduleTopics.FirstOrDefault(t => t.Id == topicId);
+
+            var caption = topic is null ? $"#{topicId}" : $"{topic.TopicCode} ({topic.LessonTypeName})";
+
+            var confirmed = await JS.InvokeAsync<bool>("confirm", $"Видалити тему {caption}? Дію не можна скасувати.");
+
+            if (!confirmed) return;
+
+
+
             await Admin.DeleteModuleTopic(plansModuleId.Value, topicId);
+
             ok = "Тему видалено.";
+
             await LoadTopics(plansModuleId.Value);
+
         }
+
         catch (Exception ex)
+
         {
+
             error = ex.Message;
+
         }
+
     }
+
+
+
+    ///
     /// <summary>
     /// Фільтрує перелік модулів за введеним рядком.
     /// </summary>

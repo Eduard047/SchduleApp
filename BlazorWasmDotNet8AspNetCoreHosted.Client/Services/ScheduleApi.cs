@@ -7,6 +7,9 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services;
 // API-клієнт для роботи з даними розкладу
 public sealed class ScheduleApi(HttpClient http) : IScheduleApi
 {
+    private static string WithConfirm(string url)
+        => url.Contains('?') ? $"{url}&confirm=true" : $"{url}?confirm=true";
+
     public async Task<MetaResponseDto> GetMeta(DateOnly? weekStart = null)
     {
         var url = weekStart is DateOnly d
@@ -36,7 +39,7 @@ public sealed class ScheduleApi(HttpClient http) : IScheduleApi
 
     public async Task Delete(int id)
     {
-        var res = await http.DeleteAsync($"api/schedule/{id}");
+        var res = await http.DeleteAsync(WithConfirm($"api/schedule/{id}"));
         await res.EnsureSuccessWithDetailsAsync();
     }
 

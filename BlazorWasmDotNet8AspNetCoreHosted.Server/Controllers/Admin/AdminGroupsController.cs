@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 using GroupEntity = BlazorWasmDotNet8AspNetCoreHosted.Server.Domain.Entities.Group;
@@ -41,6 +42,7 @@ public class AdminGroupsController(AppDbContext db) : ControllerBase
     }
 
     [HttpDelete("{id:int}")]
+    [RequireDeletionConfirmation("групу")]
     public async Task<IActionResult> Delete(int id, [FromQuery] bool force = false)
     {
         

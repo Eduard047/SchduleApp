@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Linq;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Application;
+using BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Domain.Entities;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
@@ -346,6 +347,7 @@ public class ScheduleController : ControllerBase
 
     
     [HttpDelete("{id:int}")]
+    [RequireDeletionConfirmation("запис розкладу")]
     public async Task<IActionResult> Delete(int id)
     {
         var info = await _db.ScheduleItems

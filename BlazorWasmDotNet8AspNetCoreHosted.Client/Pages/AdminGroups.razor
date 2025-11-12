@@ -1,4 +1,4 @@
-@* Сторінка адміністрування навчальних груп *@
+﻿@* Сторінка адміністрування навчальних груп *@
 @page "/admin/groups"
 @using System.Net
 @using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
@@ -146,33 +146,38 @@
         catch (Exception ex) { error = ex.Message; }
     }
 
-    private async Task Delete(int id)
-    {
-        error = ok = null;
-        try
-        {
-            try
-            {
-                await Api.DeleteGroup(id);
-                await Load();
-                ok = "Видалено.";
-                return;
-            }
-            catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Conflict || ex.Message.Contains("409"))
-            {
-                var sure = await JS.InvokeAsync<bool>("confirm",
-                    "Група використовується у розкладі. Видалити разом із усіма її заняттями?");
-                if (!sure) { error = "Скасовано користувачем."; return; }
+    private async Task Delete(int id)
+    {
+        error = ok = null;
+        var group = items.FirstOrDefault(g => g.Id == id);
+        var caption = group?.Name ?? $"#{id}";
+        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Видалити групу {caption}? Дію не можна скасувати.");
+        if (!confirmed) return;
+
+        try
+        {
+            try
+            {
+                await Api.DeleteGroup(id);
+                await Load();
+                ok = "Видалено.";
+                return;
+            }
+            catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Conflict || ex.Message.Contains("409"))
+            {
+                var sure = await JS.InvokeAsync<bool>("confirm",
+                    "Група використовується у розкладі. Видалити всі пов’язані заняття?");
+                if (!sure) { error = "Дію скасовано користувачем."; return; }
+
+                await Api.DeleteGroup(id, force: true);
+                await Load();
+                ok = "Групу та пов’язані записи видалено.";
+            }
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
 
-                await Api.DeleteGroup(id, force: true);
-                await Load();
-                ok = "Групу та пов’язані заняття видалено.";
-            }
-        }
-        catch (Exception ex) { error = ex.Message; }
-    }
-
-    
     private IEnumerable<GroupEditDto> ApplyFilter(IEnumerable<GroupEditDto> seq)
     {
         if (string.IsNullOrWhiteSpace(filter)) return seq;

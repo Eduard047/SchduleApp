@@ -1,7 +1,8 @@
-@* Сторінка адміністрування викладачів *@
+﻿@* Сторінка адміністрування викладачів *@
 @page "/admin/teachers"
 @using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
 @inject HttpClient Http
+@inject IJSRuntime JS
 
 <h3>Викладачі</h3>
 
@@ -125,7 +126,7 @@ else
                 <thead>
                     <tr>
                         <th>Курс</th>
-                        <th style="width:220px">Цільові години / Заплановано</th>
+                        <th style="width:200px">Заплановано годин</th>
                         <th style="width:120px">Активне</th>
                     </tr>
                 </thead>
@@ -136,18 +137,7 @@ else
                         <tr>
                             <td>@c.Name</td>
                             <td>
-                                <div class="input-group input-group-sm">
-                                    <input class="form-control" type="number"
-                                           value="@row.TargetHours"
-                                           @onchange="e => UpdateLoadHours(c.Id, e.Value?.ToString())" />
-                                    <span class="input-group-text">@row.ScheduledHours</span>
-                                </div>
-                                @if (row.ScheduledHours > row.TargetHours)
-                                {
-                                    <div class="form-text text-danger">
-                                        Перевищено на @(row.ScheduledHours - row.TargetHours)
-                                    </div>
-                                }
+                                <span class="badge bg-secondary">@row.ScheduledHours</span>
                             </td>
                             <td>
                                 <input type="checkbox" class="form-check-input"
@@ -277,7 +267,12 @@ else
 
     private async Task Delete(int id)
     {
-        var resp = await Http.DeleteAsync($"api/admin/teachers/{id}");
+        var teacher = list.FirstOrDefault(t => t.Id == id);
+        var caption = teacher?.FullName ?? $"#{id}";
+        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Видалити викладача {caption}? Дію не можна скасувати.");
+        if (!confirmed) return;
+
+        var resp = await Http.DeleteAsync($"api/admin/teachers/{id}?confirm=true");
         if (resp.IsSuccessStatusCode)
             await LoadList();
     }
@@ -320,21 +315,14 @@ else
     
     private TeacherLoadDto GetLoad(int courseId)
     {
-        if (edit is null) return new TeacherLoadDto(courseId, 0, false, 0);
+        if (edit is null) return new TeacherLoadDto(courseId, false, 0);
         var row = edit.Loads.FirstOrDefault(l => l.CourseId == courseId);
         if (row is null)
         {
-            row = new TeacherLoadDto(courseId, 0, false, 0);
+            row = new TeacherLoadDto(courseId, false, 0);
             edit.Loads.Add(row);
         }
         return row;
-    }
-
-    private void UpdateLoadHours(int courseId, string? val)
-    {
-        if (edit is null) return;
-        var row = GetLoad(courseId);
-        if (int.TryParse(val, out var n)) row.TargetHours = n;
     }
 
     private void UpdateLoadActive(int courseId, bool active)

@@ -34,9 +34,10 @@ public sealed class TeacherDraftsApi(HttpClient http) : ITeacherDraftsApi
         return await res.Content.ReadFromJsonAsync<int>();
     }
 
-    public async Task Delete(int id)
+    public async Task Delete(int id, bool confirm = false)
     {
-        var res = await http.DeleteAsync($"api/teacher-drafts/{id}");
+        var flag = confirm ? "true" : "false";
+        var res = await http.DeleteAsync($"api/teacher-drafts/{id}?confirm={flag}");
         await res.EnsureSuccessWithDetailsAsync();
     }
 
@@ -60,3 +61,4 @@ public sealed class TeacherDraftsApi(HttpClient http) : ITeacherDraftsApi
         await res.EnsureSuccessWithDetailsAsync();
     }
 }
+

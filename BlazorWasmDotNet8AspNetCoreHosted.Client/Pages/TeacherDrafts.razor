@@ -259,13 +259,6 @@
         };
     }
 
-    private void OnLessonTypeChanged(ChangeEventArgs e)
-    {
-        var value = e.Value?.ToString();
-        var lessonTypeId = int.TryParse(value, out var parsed) ? parsed : (int?)null;
-        ApplyLessonType(lessonTypeId);
-    }
-
     private void OnRoomChanged(ChangeEventArgs e)
     {
         if (_edit is null) return;
@@ -834,9 +827,11 @@
     private async Task DeleteEdit()
     {
         if (_edit?.Id is not int id) { _err = "Виберіть чернетку для видалення."; return; }
+        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Видалити чернетку #{id}? Дію не можна скасувати.");
+        if (!confirmed) return;
         try
         {
-            await DraftsApi.Delete(id);
+            await DraftsApi.Delete(id, confirm: true);
             _ok = $"Видалено (Id = {id}).";
             await Reload();
         }
@@ -1430,16 +1425,6 @@ else
                     @foreach (var g in _meta.Groups)
                     {
                         <option value="@g.Id" selected="@(@g.Id == _edit!.GroupId)">@g.Name</option>
-                    }
-                </select>
-            </div>
-
-            <div class="editor-field">
-                <label>Тип</label>
-                <select class="select" @onchange="OnLessonTypeChanged">
-                    @foreach (var t in _meta.LessonTypes)
-                    {
-                        <option value="@t.Id" selected="@(@t.Id == _edit!.LessonTypeId)">@t.Name</option>
                     }
                 </select>
             </div>
@@ -2327,3 +2312,4 @@ else
         word-break: break-word;
     }
 </style>
+

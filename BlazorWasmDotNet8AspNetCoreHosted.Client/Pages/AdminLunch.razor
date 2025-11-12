@@ -1,8 +1,9 @@
-@* Сторінка керування перервами на обід *@
+﻿@* Сторінка керування перервами на обід *@
 @page "/admin/lunch"
 @using Microsoft.AspNetCore.Components.Forms
 @using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
 @inject BlazorWasmDotNet8AspNetCoreHosted.Client.Services.IAdminApi Admin
+@inject IJSRuntime JS
 
 <PageTitle>Адмін • Обід</PageTitle>
 
@@ -145,18 +146,23 @@
         catch (Exception ex) { error = ex.Message; }
     }
 
-    private async Task Delete(int id)
-    {
-        try
-        {
-            await Admin.DeleteLunch(id);
-            await Load();
-            ok = "Видалено.";
-        }
-        catch (Exception ex) { error = ex.Message; }
-    }
+    private async Task Delete(int id)
+    {
+        try
+        {
+            var item = items.FirstOrDefault(x => x.Id == id);
+            var caption = item is null ? $"#{id}" : $"{CourseName(item)} ({item.Start}-{item.End})";
+            var confirmed = await JS.InvokeAsync<bool>("confirm", $"Видалити налаштування обіду {caption}? Дію не можна скасувати.");
+            if (!confirmed) return;
+
+            await Admin.DeleteLunch(id);
+            await Load();
+            ok = "Видалено.";
+        }
+        catch (Exception ex) { error = ex.Message; }
+    }
+
 
-    
     private IEnumerable<LunchConfigEditDto> SortedAndFilteredItems
         => ApplySort(ApplyFilter(items));
 
