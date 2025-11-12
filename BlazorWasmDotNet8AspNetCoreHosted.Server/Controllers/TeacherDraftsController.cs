@@ -1085,7 +1085,7 @@ public sealed class TeacherDraftsController : ControllerBase
                 return null;
             }
 
-            async Task<bool> TryPlaceModuleAsync(int moduleId, DateOnly date, bool isPrimary)
+            async Task<bool> TryPlaceModuleAsync(int moduleId, DateOnly date, bool isPrimary, bool allowRepeatPreviousDay = false, bool allowExtraSameDay = false)
             {
                 if (CountFor(grp.Id, date) >= slots.Count)
                     return false;
@@ -1150,13 +1150,13 @@ public sealed class TeacherDraftsController : ControllerBase
                 }
 
                 bool TooManySameThisDay() => CountModuleForDay(grp.Id, date, moduleId) >= 2;
-                if (TooManySameThisDay())
+                if (!allowExtraSameDay && TooManySameThisDay())
                 {
                     RecordSlotFailureReasonForAllSlots(date, $"Для модуля <{ModuleLabel()}> у групи {grp.Name} уже є дві пари на {date:dd.MM.yyyy}.");
                     return false;
                 }
 
-                if (!isFiller && HadSameModulePreviousDay(grp.Id, moduleId, date))
+                if (!isFiller && !allowRepeatPreviousDay && HadSameModulePreviousDay(grp.Id, moduleId, date))
                 {
                     RecordSlotFailureReasonForAllSlots(date, $"Для модуля <{ModuleLabel()}> у групи {grp.Name} вже розкладено пару напередодні, тому цей слот пропущено.");
                     return false;
@@ -1376,7 +1376,7 @@ public sealed class TeacherDraftsController : ControllerBase
 
                 var modulesAttemptedToday = new HashSet<int>();
 
-                async Task FillWithRemainingModulesAsync()
+                async Task FillWithRemainingModulesAsync(bool allowRepeatPreviousDay = false, bool allowExtraSameDay = false)
                 {
                     foreach (var moduleId in orderedModules)
                     {
@@ -1385,7 +1385,7 @@ public sealed class TeacherDraftsController : ControllerBase
                             break;
                         }
 
-                        if (modulesAttemptedToday.Contains(moduleId))
+                        if (!allowExtraSameDay && modulesAttemptedToday.Contains(moduleId))
                         {
                             continue;
                         }
@@ -1396,7 +1396,7 @@ public sealed class TeacherDraftsController : ControllerBase
                         }
 
                         modulesAttemptedToday.Add(moduleId);
-                        await TryPlaceModuleAsync(moduleId, date, isPrimary: false);
+                        await TryPlaceModuleAsync(moduleId, date, isPrimary: false, allowRepeatPreviousDay: allowRepeatPreviousDay, allowExtraSameDay: allowExtraSameDay);
                     }
                 }
 
@@ -1481,6 +1481,11 @@ public sealed class TeacherDraftsController : ControllerBase
                 if (CountFor(grp.Id, date) < maxPerDay)
                 {
                     await FillWithRemainingModulesAsync();
+                }
+
+                if (CountFor(grp.Id, date) < maxPerDay)
+                {
+                    await FillWithRemainingModulesAsync(allowRepeatPreviousDay: true, allowExtraSameDay: true);
                 }
 
                 if (DayHasGaps(date, out var remainingGap) && remainingGap is not null)
