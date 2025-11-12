@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
+// Коментар: початкова міграція створює основні таблиці
 namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Migrations
 {
     /// <inheritdoc />
@@ -335,6 +336,31 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Migrations
                 .Annotation("MySql:CharSet", "utf8mb4");
 
             migrationBuilder.CreateTable(
+                name: "ModuleCourses",
+                columns: table => new
+                {
+                    ModuleId = table.Column<int>(type: "int", nullable: false),
+                    CourseId = table.Column<int>(type: "int", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_ModuleCourses", x => new { x.ModuleId, x.CourseId });
+                    table.ForeignKey(
+                        name: "FK_ModuleCourses_Courses_CourseId",
+                        column: x => x.CourseId,
+                        principalTable: "Courses",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "FK_ModuleCourses_Modules_ModuleId",
+                        column: x => x.ModuleId,
+                        principalTable: "Modules",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                })
+                .Annotation("MySql:CharSet", "utf8mb4");
+
+            migrationBuilder.CreateTable(
                 name: "ModuleFillers",
                 columns: table => new
                 {
@@ -452,17 +478,12 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Migrations
                         .Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
                     ModuleId = table.Column<int>(type: "int", nullable: false),
                     Order = table.Column<int>(type: "int", nullable: false, defaultValue: 0),
-                    BlockNumber = table.Column<int>(type: "int", nullable: false, defaultValue: 0),
-                    BlockTitle = table.Column<string>(type: "varchar(512)", maxLength: 512, nullable: false, defaultValue: "")
+                    TopicCode = table.Column<string>(type: "varchar(64)", maxLength: 64, nullable: false)
                         .Annotation("MySql:CharSet", "utf8mb4"),
-                    LessonNumber = table.Column<int>(type: "int", nullable: false, defaultValue: 0),
-                    QuestionNumber = table.Column<int>(type: "int", nullable: false, defaultValue: 0),
                     LessonTypeId = table.Column<int>(type: "int", nullable: false),
                     TotalHours = table.Column<int>(type: "int", nullable: false),
                     AuditoriumHours = table.Column<int>(type: "int", nullable: false),
-                    SelfStudyHours = table.Column<int>(type: "int", nullable: false),
-                    Title = table.Column<string>(type: "longtext", nullable: false)
-                        .Annotation("MySql:CharSet", "utf8mb4")
+                    SelfStudyHours = table.Column<int>(type: "int", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -663,6 +684,12 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Migrations
                 column: "BuildingId");
 
             migrationBuilder.CreateIndex(
+                name: "IX_ModuleCourses_CourseId_ModuleId",
+                table: "ModuleCourses",
+                columns: new[] { "CourseId", "ModuleId" },
+                unique: true);
+
+            migrationBuilder.CreateIndex(
                 name: "IX_ModuleFillers_CourseId_ModuleId",
                 table: "ModuleFillers",
                 columns: new[] { "CourseId", "ModuleId" },
@@ -717,15 +744,15 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Migrations
                 column: "LessonTypeId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_ModuleTopics_ModuleId_BlockNumber_LessonNumber_QuestionNumber",
-                table: "ModuleTopics",
-                columns: new[] { "ModuleId", "BlockNumber", "LessonNumber", "QuestionNumber" },
-                unique: true);
-
-            migrationBuilder.CreateIndex(
                 name: "IX_ModuleTopics_ModuleId_Order",
                 table: "ModuleTopics",
                 columns: new[] { "ModuleId", "Order" },
+                unique: true);
+
+            migrationBuilder.CreateIndex(
+                name: "IX_ModuleTopics_ModuleId_TopicCode",
+                table: "ModuleTopics",
+                columns: new[] { "ModuleId", "TopicCode" },
                 unique: true);
 
             migrationBuilder.CreateIndex(
@@ -864,6 +891,9 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Migrations
 
             migrationBuilder.DropTable(
                 name: "ModuleBuildings");
+
+            migrationBuilder.DropTable(
+                name: "ModuleCourses");
 
             migrationBuilder.DropTable(
                 name: "ModuleFillers");

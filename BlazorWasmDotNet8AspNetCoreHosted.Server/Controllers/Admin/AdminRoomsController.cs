@@ -8,6 +8,7 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Admin;
 
 [ApiController]
 [Route("api/admin/rooms")]
+// Контролер адміністратора для приміщень
 public class AdminRoomsController(AppDbContext db) : ControllerBase
 {
     [HttpGet]

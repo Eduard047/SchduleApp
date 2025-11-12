@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+
+// DTO для конфігурації послідовностей модулів
 namespace BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 
 public record ModuleSequenceItemDto(int Id, int ModuleId, string ModuleCode, string ModuleTitle, int Order);

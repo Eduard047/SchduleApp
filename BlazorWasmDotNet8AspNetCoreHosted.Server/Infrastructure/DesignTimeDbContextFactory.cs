@@ -6,6 +6,7 @@ using Microsoft.Extensions.Configuration;
 using Pomelo.EntityFrameworkCore.MySql.Infrastructure;
 namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Infrastructure;
 
+// Фабрика для створення контексту під час міграцій
 public class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<AppDbContext>
 {
     public AppDbContext CreateDbContext(string[] args)

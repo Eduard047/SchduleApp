@@ -1,3 +1,4 @@
+// DTO представлення запису розкладу
 namespace BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 
 public record ScheduleItemDto(

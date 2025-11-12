@@ -1,3 +1,4 @@
+// DTO для планів навантаження курсів та модулів
 namespace BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 
 public record CourseModulePlanDto(

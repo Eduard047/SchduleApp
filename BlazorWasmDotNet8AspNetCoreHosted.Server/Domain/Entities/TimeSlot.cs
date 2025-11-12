@@ -6,7 +6,7 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Domain.Entities;
 
 
 
-
+// Сутність часового слоту для бази даних
 public class TimeSlot
 {
     public int Id { get; set; }

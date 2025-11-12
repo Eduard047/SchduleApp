@@ -8,6 +8,7 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Admin;
 
 [ApiController]
 [Route("api/admin/types")]
+// Контролер адміністратора для типів занять
 public class AdminTypesController(AppDbContext db) : ControllerBase
 {
     

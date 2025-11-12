@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 
 namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services;
 
+// Виняток для обробки детальних помилок від API
 public sealed class ApiErrorException : Exception
 {
     public ApiErrorException(HttpStatusCode statusCode, string message, IReadOnlyList<string>? errors = null, IReadOnlyList<string>? warnings = null, Exception? innerException = null)

@@ -11,6 +11,7 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Admin;
 
 [ApiController]
 [Route("api/admin/module-sequence")]
+// Контролер адміністратора для послідовностей модулів
 public sealed class AdminModuleSequenceController(AppDbContext db) : ControllerBase
 {
     [HttpGet("{courseId:int}")]
@@ -57,9 +58,9 @@ public sealed class AdminModuleSequenceController(AppDbContext db) : ControllerB
             return NotFound(new { message = "Курс не знайдено." });
         }
 
-        var moduleIds = await db.Modules.AsNoTracking()
-            .Where(m => m.CourseId == dto.CourseId)
-            .Select(m => m.Id)
+        var moduleIds = await db.ModuleCourses.AsNoTracking()
+            .Where(mc => mc.CourseId == dto.CourseId)
+            .Select(mc => mc.ModuleId)
             .ToListAsync();
 
         var invalidMain = dto.MainModuleIds.Except(moduleIds).ToList();

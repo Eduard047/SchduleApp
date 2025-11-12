@@ -1,3 +1,4 @@
+@* Сторінка керування календарними винятками *@
 @page "/admin/calendar"
 @using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
 @inject BlazorWasmDotNet8AspNetCoreHosted.Client.Services.IAdminApi Admin
@@ -88,12 +89,15 @@
 
 @code {
     
+    // Зберігаємо повідомлення про помилки та успішні дії.
     private string? error, ok;
 
     
+    // Кешовані винятки календаря, завантажені з API.
     private List<CalendarExceptionEditDto> items = new();
 
     
+    // Модель форми для створення або редагування запису.
     private CalendarExceptionEditDto form = new()
     {
         Id = null,
@@ -103,13 +107,20 @@
     };
 
     
+    // Поточні параметри сортування та фільтрування.
     private string sortField = nameof(CalendarExceptionEditDto.Date);
     private bool sortAsc = true;
     private string? filter;
 
     
+    /// <summary>
+    /// Викликається під час ініціалізації сторінки та завантажує дані.
+    /// </summary>
     protected override async Task OnInitializedAsync() => await Load();
 
+    /// <summary>
+    /// Оновлює список винятків, очищаючи попередні повідомлення.
+    /// </summary>
     private async Task Load()
     {
         try
@@ -121,10 +132,16 @@
     }
 
     
+    /// <summary>
+    /// Переносить дані в форму для подальшого редагування.
+    /// </summary>
     private void EditRow(CalendarExceptionEditDto x)
         => form = new() { Id = x.Id, Date = x.Date, IsWorkingDay = x.IsWorkingDay, Name = x.Name };
 
     
+    /// <summary>
+    /// Зберігає поточний запис і перезавантажує список.
+    /// </summary>
     private async Task Save()
     {
         try
@@ -138,6 +155,9 @@
     }
 
     
+    /// <summary>
+    /// Видаляє запис за ідентифікатором та оновлює таблицю.
+    /// </summary>
     private async Task Delete(int id)
     {
         try
@@ -150,10 +170,16 @@
     }
 
     
+    /// <summary>
+    /// Безпечно перетворює рядок у DateOnly для сортування.
+    /// </summary>
     private static DateOnly DO(string? s)
         => DateOnly.TryParse(s, out var d) ? d : DateOnly.MinValue;
 
     
+    /// <summary>
+    /// Повертає запис, що відповідає текстовому фільтру.
+    /// </summary>
     private IEnumerable<CalendarExceptionEditDto> ApplyFilter(IEnumerable<CalendarExceptionEditDto> seq)
     {
         if (string.IsNullOrWhiteSpace(filter)) return seq;
@@ -170,6 +196,9 @@
     }
 
     
+    /// <summary>
+    /// Виконує сортування колекції згідно з обраними параметрами.
+    /// </summary>
     private IEnumerable<CalendarExceptionEditDto> ApplySort(IEnumerable<CalendarExceptionEditDto> seq)
     {
         return (sortField, sortAsc) switch
@@ -191,10 +220,14 @@
     }
 
     
+    // Отримує колекцію з урахуванням фільтру та сортування.
     private IEnumerable<CalendarExceptionEditDto> SortedAndFiltered
         => ApplySort(ApplyFilter(items));
 
     
+    /// <summary>
+    /// Змінює поле сортування або напрямок.
+    /// </summary>
     private void ToggleSort(string field)
     {
         if (sortField == field) sortAsc = !sortAsc;
@@ -202,6 +235,9 @@
     }
 
     
+    /// <summary>
+    /// Додає піктограму до заголовку таблиці залежно від сортування.
+    /// </summary>
     private MarkupString HeaderIcon(string field)
         => new(sortField == field ? $"<span class=\"ms-1\">{(sortAsc ? "▲" : "▼")}</span>" : "");
 }

@@ -4,10 +4,7 @@ using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 
 namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
 {
-    
-    
-    
-    
+    // API-клієнт для адміністративних операцій
     public sealed class AdminApi(HttpClient http) : IAdminApi
     {
         private readonly HttpClient _http = http;
@@ -93,8 +90,6 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
             await Ensure(resp);
             return (await resp.Content.ReadFromJsonAsync<int>())!;
         }
-        public async Task ReorderModuleTopics(int moduleId, List<int> orderedIds)
-            => await Ensure(await _http.PostAsJsonAsync($"api/admin/modules/{moduleId}/topics/reorder", orderedIds));
         public async Task DeleteModuleTopic(int moduleId, int topicId)
             => await Ensure(await _http.DeleteAsync($"api/admin/modules/{moduleId}/topics/{topicId}"));
 
@@ -159,18 +154,28 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
 
 
         
-        public async Task<List<CourseModulePlanDto>> GetModulePlans(int moduleId)
-            => await _http.GetFromJsonAsync<List<CourseModulePlanDto>>($"api/admin/plans/module/{moduleId}") ?? new();
-        public async Task UpsertModulePlans(int moduleId, List<SaveCourseModulePlanDto> rows)
-            => await Ensure(await _http.PostAsJsonAsync($"api/admin/plans/module/{moduleId}/upsert", rows));
-        public async Task<CourseModulePlanDto> GetCourseModulePlan(int moduleId)
+        public async Task<List<CourseModulePlanDto>> GetModulePlans(int moduleId, int? courseId = null)
         {
-            var list = await GetModulePlans(moduleId);
-            return list.FirstOrDefault() ?? new CourseModulePlanDto(
-                CourseId: 0, ModuleId: moduleId, TargetHours: 0, ScheduledHours: 0, IsActive: false);
+            var url = courseId is int cid && cid > 0
+                ? $"api/admin/plans/module/{moduleId}?courseId={cid}"
+                : $"api/admin/plans/module/{moduleId}";
+            return await _http.GetFromJsonAsync<List<CourseModulePlanDto>>(url) ?? new();
         }
-        public async Task UpsertCourseModulePlan(int moduleId, SaveCourseModulePlanDto dto)
-            => await UpsertModulePlans(moduleId, new List<SaveCourseModulePlanDto> { dto });
+        public async Task UpsertModulePlans(int moduleId, int? courseId, List<SaveCourseModulePlanDto> rows)
+        {
+            var url = courseId is int cid && cid > 0
+                ? $"api/admin/plans/module/{moduleId}/upsert?courseId={cid}"
+                : $"api/admin/plans/module/{moduleId}/upsert";
+            await Ensure(await _http.PostAsJsonAsync(url, rows));
+        }
+        public async Task<CourseModulePlanDto> GetCourseModulePlan(int moduleId, int courseId)
+        {
+            var list = await GetModulePlans(moduleId, courseId);
+            return list.FirstOrDefault() ?? new CourseModulePlanDto(
+                CourseId: courseId, ModuleId: moduleId, TargetHours: 0, ScheduledHours: 0, IsActive: false);
+        }
+        public async Task UpsertCourseModulePlan(int moduleId, int courseId, SaveCourseModulePlanDto dto)
+            => await UpsertModulePlans(moduleId, courseId, new List<SaveCourseModulePlanDto> { dto });
 
 
         public async Task<ModuleSequenceConfigDto?> GetModuleSequence(int courseId)

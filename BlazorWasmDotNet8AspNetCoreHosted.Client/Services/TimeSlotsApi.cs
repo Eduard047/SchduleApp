@@ -3,6 +3,7 @@ using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 
 namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services;
 
+// API-клієнт для керування часовими слотами
 public class TimeSlotsApi
 {
     private readonly HttpClient _http;

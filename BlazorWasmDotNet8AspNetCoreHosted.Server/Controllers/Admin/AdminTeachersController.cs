@@ -9,6 +9,7 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers;
 
 [ApiController]
 [Route("api/admin/teachers")]
+// Контролер адміністратора для керування викладачами
 public class AdminTeachersController(AppDbContext db) : ControllerBase
 {
     

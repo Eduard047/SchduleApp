@@ -1,3 +1,4 @@
+// DTO запиту для оновлення або створення елемента розкладу
 namespace BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 
 public record UpsertScheduleItemRequest(

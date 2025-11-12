@@ -1,3 +1,4 @@
+// DTO для очищення тижня в розкладі
 namespace BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 
 public record ClearWeekRequest(

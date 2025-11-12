@@ -1,3 +1,4 @@
+// DTO для опису параметрів часового слоту
 namespace BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 
 public record class TimeSlotDto

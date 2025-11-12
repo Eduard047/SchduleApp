@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Infrastructure;
@@ -8,6 +9,7 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Admin;
 
 [ApiController]
 [Route("api/admin/courses")]
+// Контролер адміністратора для курсів
 public class AdminCoursesController(AppDbContext db) : ControllerBase
 {
     [HttpGet]
@@ -46,6 +48,7 @@ public class AdminCoursesController(AppDbContext db) : ControllerBase
         
         var used = await db.Groups.AnyAsync(g => g.CourseId == id)
                    || await db.Modules.AnyAsync(m => m.CourseId == id)
+                   || await db.ModuleCourses.AnyAsync(mc => mc.CourseId == id)
                    || await db.ModulePlans.AnyAsync(p => p.CourseId == id)
                    || await db.TeacherCourseLoads.AnyAsync(l => l.CourseId == id)
                    || await db.ScheduleItems.AnyAsync(s => s.Group.CourseId == id);
@@ -55,26 +58,75 @@ public class AdminCoursesController(AppDbContext db) : ControllerBase
 
         if (used && force)
         {
-            var groupIds = await db.Groups.Where(g => g.CourseId == id).Select(g => g.Id).ToListAsync();
-            var moduleIds = await db.Modules.Where(m => m.CourseId == id).Select(m => m.Id).ToListAsync();
+            var moduleIdsLinked = await db.ModuleCourses
+                .Where(mc => mc.CourseId == id)
+                .Select(mc => mc.ModuleId)
+                .Distinct()
+                .ToListAsync();
 
-            
             await db.ScheduleItems.Where(s => s.Group.CourseId == id).ExecuteDeleteAsync();
             await db.ModulePlans.Where(p => p.CourseId == id).ExecuteDeleteAsync();
+            await db.ModuleSequenceItems.Where(si => si.CourseId == id).ExecuteDeleteAsync();
+            await db.ModuleFillers.Where(f => f.CourseId == id).ExecuteDeleteAsync();
             await db.TeacherCourseLoads.Where(l => l.CourseId == id).ExecuteDeleteAsync();
+            await db.TimeSlots.Where(ts => ts.CourseId == id).ExecuteDeleteAsync();
+            await db.LunchConfigs.Where(lc => lc.CourseId == id).ExecuteDeleteAsync();
 
-            
-            if (moduleIds.Count > 0)
+            if (moduleIdsLinked.Count > 0)
             {
-                await db.TeacherModules.Where(tm => moduleIds.Contains(tm.ModuleId)).ExecuteDeleteAsync();
-                await db.ModuleRooms.Where(mr => moduleIds.Contains(mr.ModuleId)).ExecuteDeleteAsync();
-                await db.ModuleBuildings.Where(mb => moduleIds.Contains(mb.ModuleId)).ExecuteDeleteAsync();
+                var moduleCourseMap = await db.ModuleCourses.AsNoTracking()
+                    .Where(mc => moduleIdsLinked.Contains(mc.ModuleId))
+                    .GroupBy(mc => mc.ModuleId)
+                    .ToDictionaryAsync(g => g.Key, g => g.Select(mc => mc.CourseId).ToList());
+
+                var modules = await db.Modules
+                    .Where(m => moduleIdsLinked.Contains(m.Id))
+                    .ToListAsync();
+
+                var modulesToDelete = new List<int>();
+
+                foreach (var module in modules)
+                {
+                    if (!moduleCourseMap.TryGetValue(module.Id, out var courseIdsForModule))
+                    {
+                        continue;
+                    }
+
+                    var alternativeCourseIds = courseIdsForModule.Where(cid => cid != id).ToList();
+
+                    if (module.CourseId == id)
+                    {
+                        if (alternativeCourseIds.Count > 0)
+                        {
+                            module.CourseId = alternativeCourseIds[0];
+                        }
+                        else
+                        {
+                            modulesToDelete.Add(module.Id);
+                        }
+                    }
+                }
+
+                if (modulesToDelete.Count > 0)
+                {
+                    await db.TeacherModules.Where(tm => modulesToDelete.Contains(tm.ModuleId)).ExecuteDeleteAsync();
+                    await db.ModuleRooms.Where(mr => modulesToDelete.Contains(mr.ModuleId)).ExecuteDeleteAsync();
+                    await db.ModuleBuildings.Where(mb => modulesToDelete.Contains(mb.ModuleId)).ExecuteDeleteAsync();
+                    await db.ModuleTopics.Where(mt => modulesToDelete.Contains(mt.ModuleId)).ExecuteDeleteAsync();
+                }
+
+                await db.SaveChangesAsync();
+
+                if (modulesToDelete.Count > 0)
+                {
+                    await db.Modules.Where(m => modulesToDelete.Contains(m.Id)).ExecuteDeleteAsync();
+                }
             }
 
-            
-            await db.Modules.Where(m => m.CourseId == id).ExecuteDeleteAsync();
+            await db.ModuleCourses.Where(mc => mc.CourseId == id).ExecuteDeleteAsync();
             await db.Groups.Where(g => g.CourseId == id).ExecuteDeleteAsync();
         }
+
 
         var rows = await db.Courses.Where(c => c.Id == id).ExecuteDeleteAsync();
         if (rows == 0) return NotFound();

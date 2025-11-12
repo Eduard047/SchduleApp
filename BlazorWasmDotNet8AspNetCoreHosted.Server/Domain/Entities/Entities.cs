@@ -3,6 +3,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Domain.Entities;
 
 
+// Доменно-дані сутності для розкладу
 public class LessonTypeRef
 {
     public int Id { get; set; } 
@@ -29,6 +30,7 @@ public class Course
 
     public ICollection<Group> Groups { get; set; } = new List<Group>();
     public ICollection<Module> Modules { get; set; } = new List<Module>();
+    public ICollection<ModuleCourse> ModuleCourses { get; set; } = new List<ModuleCourse>();
 }
 
 public class Group
@@ -95,11 +97,21 @@ public class Module
     public int CourseId { get; set; }
     public Course Course { get; set; } = default!;
 
+    public ICollection<ModuleCourse> ModuleCourses { get; set; } = new List<ModuleCourse>();
     public ICollection<TeacherModule> TeacherModules { get; set; } = new List<TeacherModule>();
     public ICollection<ModuleRoom> AllowedRooms { get; set; } = new List<ModuleRoom>();
     public ICollection<ModuleBuilding> AllowedBuildings { get; set; } = new List<ModuleBuilding>();
     
     public ICollection<ModuleTopic> Topics { get; set; } = new List<ModuleTopic>();
+}
+
+public class ModuleCourse
+{
+    public int ModuleId { get; set; }
+    public Module Module { get; set; } = default!;
+
+    public int CourseId { get; set; }
+    public Course Course { get; set; } = default!;
 }
 
 public class TeacherModule
@@ -170,19 +182,12 @@ public class ModuleTopic
     public int ModuleId { get; set; }
     public Module Module { get; set; } = default!;
     public int Order { get; set; }
-    
-    public int BlockNumber { get; set; }
-    
-    public string BlockTitle { get; set; } = string.Empty;
-    public int LessonNumber { get; set; }
-    
-    public int QuestionNumber { get; set; }
+    public string TopicCode { get; set; } = string.Empty;
     public int LessonTypeId { get; set; }
     public LessonTypeRef LessonType { get; set; } = default!;
     public int TotalHours { get; set; }
     public int AuditoriumHours { get; set; }
     public int SelfStudyHours { get; set; }
-    public string Title { get; set; } = default!;
 }
 
 

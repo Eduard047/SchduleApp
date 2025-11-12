@@ -9,6 +9,7 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Admin;
 
 [ApiController]
 [Route("api/admin/config")]
+// Контролер адміністратора для конфігурацій
 public class AdminConfigController(AppDbContext db) : ControllerBase
 {
     [HttpGet("lunch")]

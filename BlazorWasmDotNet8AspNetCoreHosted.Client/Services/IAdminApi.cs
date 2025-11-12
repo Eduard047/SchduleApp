@@ -2,10 +2,7 @@ using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 
 namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
 {
-    
-    
-    
-    
+    // Контракт адміністративного API клієнта
     public interface IAdminApi
     {
         
@@ -38,7 +35,6 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
         
         Task<List<ModuleTopicViewDto>> GetModuleTopics(int moduleId);
         Task<int> UpsertModuleTopic(int moduleId, ModuleTopicDto dto);
-        Task ReorderModuleTopics(int moduleId, List<int> orderedIds);
         Task DeleteModuleTopic(int moduleId, int topicId);
 
         
@@ -69,10 +65,10 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
 
 
         
-        Task<List<CourseModulePlanDto>> GetModulePlans(int moduleId);
-        Task UpsertModulePlans(int moduleId, List<SaveCourseModulePlanDto> rows);
-        Task<CourseModulePlanDto> GetCourseModulePlan(int moduleId);
-        Task UpsertCourseModulePlan(int moduleId, SaveCourseModulePlanDto dto);
+        Task<List<CourseModulePlanDto>> GetModulePlans(int moduleId, int? courseId = null);
+        Task UpsertModulePlans(int moduleId, int? courseId, List<SaveCourseModulePlanDto> rows);
+        Task<CourseModulePlanDto> GetCourseModulePlan(int moduleId, int courseId);
+        Task UpsertCourseModulePlan(int moduleId, int courseId, SaveCourseModulePlanDto dto);
 
 
         Task<ModuleSequenceConfigDto?> GetModuleSequence(int courseId);

@@ -6,6 +6,7 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers;
 
 [ApiController]
 [Route("api/rules")]
+// Контролер для валідації правил розкладу
 public class RulesController(RulesService rules) : ControllerBase
 {
     [HttpPost("validate")]

@@ -3,6 +3,7 @@ using BlazorWasmDotNet8AspNetCoreHosted.Server.Infrastructure;
 using Pomelo.EntityFrameworkCore.MySql.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Application;
 
+// Точка входу для налаштування серверного застосунку
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllersWithViews();

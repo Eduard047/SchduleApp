@@ -2,7 +2,7 @@ using System.Linq;
 
 using System.Collections.Generic;
 
-using System.Globalization;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Infrastructure;
@@ -15,10 +15,13 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Admin;
 
 
 
+// Контролер адміністратора для роботи з модулями
 [ApiController]
 [Route("api/admin/modules")]
 public class AdminModulesController(AppDbContext db) : ControllerBase
 {
+    
+    private static readonly Regex TopicCodeRegex = new(@"^\d+(\.\d+)*$", RegexOptions.Compiled);
     
     
     
@@ -42,7 +45,11 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
                 m.ReportingForm,
                 
                 AllowedRoomIds = m.AllowedRooms.Select(ar => ar.RoomId).ToList(),
-                AllowedBuildingIds = m.AllowedBuildings.Select(ab => ab.BuildingId).ToList()
+                AllowedBuildingIds = m.AllowedBuildings.Select(ab => ab.BuildingId).ToList(),
+                CloneCourseIds = m.ModuleCourses
+                    .Where(mc => mc.CourseId != m.CourseId)
+                    .Select(mc => mc.CourseId)
+                    .ToList()
             })
             .ToListAsync();
 
@@ -67,10 +74,9 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
             m = await db.Modules
                 .Include(x => x.AllowedRooms)
                 .Include(x => x.AllowedBuildings)
+                .Include(x => x.ModuleCourses)
                 .FirstOrDefaultAsync(x => x.Id == id)
                 ?? throw new ArgumentException("Модуль не знайдено");
-
-            var oldCourseId = m.CourseId;
 
             
             m.Code = dto.Code;
@@ -100,12 +106,48 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
             foreach (var add in newBIds.Except(oldBIds))
                 db.ModuleBuildings.Add(new ModuleBuilding { ModuleId = m.Id, BuildingId = add });
 
+            var additionalCourseIds = dto.CloneCourseIds?
+                .Where(id => id > 0 && id != dto.CourseId)
+                .Distinct()
+                .ToList() ?? new List<int>();
+
+            var desiredCourseIds = new HashSet<int>(additionalCourseIds) { dto.CourseId };
+
+            var linksToRemove = m.ModuleCourses
+                .Where(link => !desiredCourseIds.Contains(link.CourseId))
+                .ToList();
+            foreach (var link in linksToRemove)
+            {
+                m.ModuleCourses.Remove(link);
+                db.ModuleCourses.Remove(link);
+            }
+
+            var removedCourseIds = linksToRemove
+                .Select(link => link.CourseId)
+                .Distinct()
+                .ToList();
+
+            if (removedCourseIds.Count > 0)
+            {
+                await db.ModulePlans.Where(p => p.ModuleId == m.Id && removedCourseIds.Contains(p.CourseId)).ExecuteDeleteAsync();
+                await db.ModuleSequenceItems.Where(si => si.ModuleId == m.Id && removedCourseIds.Contains(si.CourseId)).ExecuteDeleteAsync();
+                await db.ModuleFillers.Where(f => f.ModuleId == m.Id && removedCourseIds.Contains(f.CourseId)).ExecuteDeleteAsync();
+            }
+
+            foreach (var cid in desiredCourseIds)
+            {
+                if (!m.ModuleCourses.Any(link => link.CourseId == cid))
+                {
+                    m.ModuleCourses.Add(new ModuleCourse
+                    {
+                        ModuleId = m.Id,
+                        CourseId = cid
+                    });
+                }
+            }
+
             await db.SaveChangesAsync();
 
-            
-
-            
-            await CloneIntoAdditionalCoursesAsync(m, dto);
             return Ok(m.Id);
         }
         else
@@ -124,6 +166,23 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
             db.Modules.Add(m);
             await db.SaveChangesAsync();
 
+            var additionalCourseIds = dto.CloneCourseIds?
+                .Where(id => id > 0 && id != dto.CourseId)
+                .Distinct()
+                .ToList() ?? new List<int>();
+
+            var allCourseIds = new HashSet<int>(additionalCourseIds) { dto.CourseId };
+            foreach (var cid in allCourseIds)
+            {
+                db.ModuleCourses.Add(new ModuleCourse
+                {
+                    ModuleId = m.Id,
+                    CourseId = cid
+                });
+            }
+
+            await db.SaveChangesAsync();
+
             
             foreach (var rid in dto.AllowedRoomIds.Distinct())
                 db.ModuleRooms.Add(new ModuleRoom { ModuleId = m.Id, RoomId = rid });
@@ -132,8 +191,6 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
 
             await db.SaveChangesAsync();
 
-            
-            await CloneIntoAdditionalCoursesAsync(m, dto);
             return Ok(m.Id);
         }
     }
@@ -235,11 +292,9 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
         var topics = await db.ModuleTopics
             .Where(t => t.ModuleId == moduleId)
             .Include(t => t.LessonType)
-            .OrderBy(t => t.BlockNumber)
-            .ThenBy(t => t.Order)
-            .ThenBy(t => t.LessonNumber)
-            .ThenBy(t => t.QuestionNumber)
             .ToListAsync();
+
+        topics.Sort((a, b) => CompareTopicCodes(a.TopicCode, b.TopicCode));
 
         var topicIds = topics.Select(t => t.Id).ToList();
         var plannedDict = new Dictionary<int, List<string>>();
@@ -262,24 +317,6 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
                 .ToDictionaryAsync(g => g.Key, g => g.Select(x => x.GroupName).OrderBy(x => x).ToList());
         }
 
-        static string BuildTopicCode(string? moduleCode, ModuleTopic topic)
-        {
-            var segments = new List<string>();
-            if (!string.IsNullOrWhiteSpace(moduleCode))
-                segments.Add(moduleCode.Trim());
-            if (topic.BlockNumber > 0)
-                segments.Add(topic.BlockNumber.ToString(CultureInfo.InvariantCulture));
-            var themePart = topic.LessonNumber > 0
-                ? topic.LessonNumber.ToString(CultureInfo.InvariantCulture)
-                : topic.Order.ToString(CultureInfo.InvariantCulture);
-            segments.Add(themePart);
-            var questionPart = topic.QuestionNumber > 0
-                ? topic.QuestionNumber.ToString(CultureInfo.InvariantCulture)
-                : "1";
-            segments.Add(questionPart);
-            return string.Join(".", segments);
-        }
-
         var result = topics.Select(t =>
         {
             var planned = plannedDict.TryGetValue(t.Id, out var pg) ? new List<string>(pg) : new List<string>();
@@ -290,18 +327,13 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
                 t.Id,
                 t.ModuleId,
                 t.Order,
-                t.BlockNumber,
-                t.BlockTitle,
-                t.LessonNumber,
-                t.QuestionNumber,
-                BuildTopicCode(module.Code, t),
+                t.TopicCode,
                 t.LessonTypeId,
                 lessonTypeCode,
                 lessonTypeName,
                 t.TotalHours,
                 t.AuditoriumHours,
                 t.SelfStudyHours,
-                t.Title,
                 planned,
                 completed
             );
@@ -313,8 +345,8 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
     [HttpPost("{moduleId:int}/topics/upsert")]
     public async Task<ActionResult<int>> UpsertTopic(int moduleId, [FromBody] ModuleTopicDto dto)
     {
-        var module = await db.Modules.FirstOrDefaultAsync(m => m.Id == moduleId);
-        if (module is null) return NotFound();
+        var moduleExists = await db.Modules.AnyAsync(m => m.Id == moduleId);
+        if (!moduleExists) return NotFound();
 
         
 
@@ -322,142 +354,60 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
         if (!lessonTypeExists) return BadRequest("Lesson type not found");
 
         var topicsQuery = db.ModuleTopics.Where(t => t.ModuleId == moduleId);
-        var trimmedBlockTitle = dto.BlockTitle?.Trim() ?? string.Empty;
-        var trimmedTitle = dto.Title?.Trim() ?? string.Empty;
-        var requestedBlockNumber = dto.BlockNumber > 0
-            ? dto.BlockNumber
-            : (await topicsQuery.MaxAsync(t => (int?)t.BlockNumber) ?? 0) + 1;
+        var trimmedTopicCode = dto.TopicCode?.Trim() ?? string.Empty;
 
-        async Task<int> NextLessonNumberAsync(int blockNumber)
+        if (string.IsNullOrWhiteSpace(trimmedTopicCode))
+            return BadRequest("Topic code is required");
+
+        if (!TopicCodeRegex.IsMatch(trimmedTopicCode))
+            return BadRequest("Invalid topic code format");
+
+        var normalizedTopicCode = trimmedTopicCode;
+        var topicId = dto.Id ?? 0;
+
+        var duplicateExists = await topicsQuery
+            .AnyAsync(t => t.Id != topicId && t.TopicCode == normalizedTopicCode);
+        if (duplicateExists)
+            return BadRequest("Topic code already exists");
+
+        var entity = topicId > 0
+            ? await topicsQuery.SingleOrDefaultAsync(t => t.Id == topicId)
+            : null;
+
+        if (entity is null)
         {
-            return (await topicsQuery
-                .Where(t => t.BlockNumber == blockNumber)
-                .MaxAsync(t => (int?)t.LessonNumber) ?? 0) + 1;
-        }
-
-        async Task<int> NextQuestionNumberAsync(int blockNumber, int lessonNumber, int? excludeId = null)
-        {
-            return (await topicsQuery
-                    .Where(t => t.BlockNumber == blockNumber
-                                && t.LessonNumber == lessonNumber
-                                && (!excludeId.HasValue || t.Id != excludeId.Value))
-                    .MaxAsync(t => (int?)t.QuestionNumber) ?? 0) + 1;
-        }
-
-        ModuleTopic entity;
-        if (dto.Id is int topicId && topicId > 0)
-        {
-            entity = await topicsQuery.FirstOrDefaultAsync(t => t.Id == topicId)
-                ?? throw new ArgumentException("Topic not found");
-
-            var blockChanged = entity.BlockNumber != requestedBlockNumber;
-            entity.BlockNumber = requestedBlockNumber;
-
-            if (!string.IsNullOrWhiteSpace(trimmedBlockTitle))
-            {
-                entity.BlockTitle = trimmedBlockTitle;
-            }
-            else if (blockChanged || string.IsNullOrWhiteSpace(entity.BlockTitle))
-            {
-                entity.BlockTitle = await topicsQuery
-                    .Where(t => t.BlockNumber == entity.BlockNumber
-                                && t.Id != entity.Id
-                                && t.BlockTitle != null
-                                && t.BlockTitle != "")
-                    .Select(t => t.BlockTitle)
-                    .FirstOrDefaultAsync() ?? string.Empty;
-            }
-
-            var previousLessonNumber = entity.LessonNumber;
-            var lessonNumber = dto.LessonNumber > 0
-                ? dto.LessonNumber
-                : (blockChanged || previousLessonNumber <= 0
-                    ? await NextLessonNumberAsync(entity.BlockNumber)
-                    : previousLessonNumber);
-            entity.LessonNumber = lessonNumber;
-
-            var questionNumber = dto.QuestionNumber > 0
-                ? dto.QuestionNumber
-                : (blockChanged || entity.QuestionNumber <= 0 || lessonNumber != previousLessonNumber
-                    ? await NextQuestionNumberAsync(entity.BlockNumber, lessonNumber, entity.Id)
-                    : entity.QuestionNumber);
-            entity.QuestionNumber = questionNumber;
-        }
-        else
-        {
-            var nextOrder = await topicsQuery.MaxAsync(t => (int?)t.Order) ?? 0;
-            var blockTitle = !string.IsNullOrWhiteSpace(trimmedBlockTitle)
-                ? trimmedBlockTitle
-                : await topicsQuery
-                    .Where(t => t.BlockNumber == requestedBlockNumber
-                                && t.BlockTitle != null
-                                && t.BlockTitle != "")
-                    .Select(t => t.BlockTitle)
-                    .FirstOrDefaultAsync() ?? string.Empty;
-            var lessonNumber = dto.LessonNumber > 0
-                ? dto.LessonNumber
-                : await NextLessonNumberAsync(requestedBlockNumber);
-            var questionNumber = dto.QuestionNumber > 0
-                ? dto.QuestionNumber
-                : await NextQuestionNumberAsync(requestedBlockNumber, lessonNumber);
+            if (topicId > 0) return NotFound();
 
             entity = new ModuleTopic
             {
-                ModuleId = moduleId,
-                Order = dto.Order > 0 ? dto.Order : nextOrder + 1,
-                BlockNumber = requestedBlockNumber,
-                BlockTitle = blockTitle,
-                LessonNumber = lessonNumber,
-                QuestionNumber = questionNumber
+                ModuleId = moduleId
             };
             db.ModuleTopics.Add(entity);
         }
 
-        entity.Title = trimmedTitle;
+        var desiredOrder = dto.Order > 0
+            ? dto.Order
+            : topicId > 0
+                ? entity.Order
+                : (await topicsQuery.MaxAsync(t => (int?)t.Order) ?? 0) + 1;
+
+        entity.Order = desiredOrder;
+        entity.TopicCode = normalizedTopicCode;
         entity.LessonTypeId = dto.LessonTypeId;
+
         var safeAuditorium = Math.Max(0, dto.AuditoriumHours);
         var safeSelfStudy = Math.Max(0, dto.SelfStudyHours);
         var totalHours = Math.Max(0, safeAuditorium + safeSelfStudy);
         entity.TotalHours = totalHours;
         entity.AuditoriumHours = safeAuditorium;
         entity.SelfStudyHours = safeSelfStudy;
-        if (dto.Order > 0 && entity.Order != dto.Order)
-            entity.Order = dto.Order;
-        if (dto.LessonNumber > 0 && entity.LessonNumber != dto.LessonNumber)
-            entity.LessonNumber = dto.LessonNumber;
-        if (dto.QuestionNumber > 0 && entity.QuestionNumber != dto.QuestionNumber)
-            entity.QuestionNumber = dto.QuestionNumber;
 
         if (entity.AuditoriumHours + entity.SelfStudyHours > entity.TotalHours)
             return BadRequest("Hourly totals exceed overall value");
 
         await db.SaveChangesAsync();
-        
+        await RecalculateModuleTopicOrder(moduleId);
         return Ok(entity.Id);
-    }
-
-    [HttpPost("{moduleId:int}/topics/reorder")]
-    public async Task<IActionResult> ReorderTopics(int moduleId, [FromBody] List<int> orderedIds)
-    {
-        if (orderedIds is null || orderedIds.Count == 0) return BadRequest("Empty order");
-
-        var topics = await db.ModuleTopics
-            .Where(t => t.ModuleId == moduleId)
-            .OrderBy(t => t.Order)
-            .ToListAsync();
-
-        if (topics.Count != orderedIds.Count || topics.Any(t => !orderedIds.Contains(t.Id)))
-            return BadRequest("Order does not match existing topics");
-
-        for (var i = 0; i < orderedIds.Count; i++)
-        {
-            var topicId = orderedIds[i];
-            var topic = topics.First(t => t.Id == topicId);
-            topic.Order = i + 1;
-        }
-
-        await db.SaveChangesAsync();
-        return NoContent();
     }
 
     [HttpDelete("{moduleId:int}/topics/{topicId:int}")]
@@ -474,65 +424,84 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
 
         db.ModuleTopics.Remove(topic);
         await db.SaveChangesAsync();
+        await RecalculateModuleTopicOrder(moduleId);
         return NoContent();
     }
 
-    private async Task CloneIntoAdditionalCoursesAsync(Module sourceModule, ModuleEditDto dto)
+    private static int CompareTopicCodes(string? left, string? right)
     {
-        
-        if (dto.CloneCourseIds is null || dto.CloneCourseIds.Count == 0) return;
+        var leftParts = ParseTopicCodeSegments(left);
+        var rightParts = ParseTopicCodeSegments(right);
+        var maxLength = Math.Max(leftParts.Count, rightParts.Count);
 
-        var requestedIds = dto.CloneCourseIds
-            .Where(id => id > 0 && id != sourceModule.CourseId)
-            .Distinct()
-            .ToList();
-        if (requestedIds.Count == 0) return;
-
-        var existingCourseIds = await db.Modules
-            .Where(mod => requestedIds.Contains(mod.CourseId)
-                          && mod.Code == sourceModule.Code)
-            .Select(mod => mod.CourseId)
-            .Distinct()
-            .ToListAsync();
-
-        var targetCourseIds = await db.Courses
-            .Where(c => requestedIds.Contains(c.Id) && !existingCourseIds.Contains(c.Id))
-            .Select(c => c.Id)
-            .ToListAsync();
-
-        if (targetCourseIds.Count == 0) return;
-
-        var clones = new List<Module>();
-        foreach (var courseId in targetCourseIds)
+        for (var i = 0; i < maxLength; i++)
         {
-            clones.Add(new Module
+            var leftValue = i < leftParts.Count ? leftParts[i] : 0;
+            var rightValue = i < rightParts.Count ? rightParts[i] : 0;
+            var diff = leftValue.CompareTo(rightValue);
+            if (diff != 0)
             {
-                Code = sourceModule.Code,
-                Title = sourceModule.Title,
-                CourseId = courseId,
-                Credits = sourceModule.Credits,
-                Competences = sourceModule.Competences,
-                LearningOutcomes = sourceModule.LearningOutcomes,
-                ReportingForm = sourceModule.ReportingForm
-            });
+                return diff;
+            }
         }
 
-        db.Modules.AddRange(clones);
+        return string.Compare(left ?? string.Empty, right ?? string.Empty, System.StringComparison.Ordinal);
+    }
+
+    private static IReadOnlyList<int> ParseTopicCodeSegments(string? code)
+    {
+        if (string.IsNullOrWhiteSpace(code))
+        {
+            return System.Array.Empty<int>();
+        }
+
+        return code.Split('.', StringSplitOptions.RemoveEmptyEntries)
+            .Select(part => int.TryParse(part, out var value) ? value : int.MaxValue)
+            .ToArray();
+    }
+
+    private async Task RecalculateModuleTopicOrder(int moduleId)
+    {
+        var topics = await db.ModuleTopics
+            .Where(t => t.ModuleId == moduleId)
+            .ToListAsync();
+
+        if (topics.Count == 0)
+        {
+            return;
+        }
+
+        topics.Sort((a, b) => CompareTopicCodes(a.TopicCode, b.TopicCode));
+
+        var needsUpdate = false;
+        for (var i = 0; i < topics.Count; i++)
+        {
+            if (topics[i].Order != i + 1)
+            {
+                needsUpdate = true;
+                break;
+            }
+        }
+
+        if (!needsUpdate)
+        {
+            return;
+        }
+
+        for (var i = 0; i < topics.Count; i++)
+        {
+            topics[i].Order = 1000 + i;
+        }
+
         await db.SaveChangesAsync();
 
-        var roomIds = dto.AllowedRoomIds?.Distinct().Where(id => id > 0).ToList() ?? new();
-        var buildingIds = dto.AllowedBuildingIds?.Distinct().Where(id => id > 0).ToList() ?? new();
-
-        if (roomIds.Count == 0 && buildingIds.Count == 0) return;
-
-        foreach (var clone in clones)
+        for (var i = 0; i < topics.Count; i++)
         {
-            foreach (var rid in roomIds)
-                db.ModuleRooms.Add(new ModuleRoom { ModuleId = clone.Id, RoomId = rid });
-            foreach (var bid in buildingIds)
-                db.ModuleBuildings.Add(new ModuleBuilding { ModuleId = clone.Id, BuildingId = bid });
+            topics[i].Order = i + 1;
         }
 
         await db.SaveChangesAsync();
     }
+
+
 }

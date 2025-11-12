@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using BlazorWasmDotNet8AspNetCoreHosted.Client.Services;
 using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 
+// API-клієнт для роботи з викладацькими чернетками
 public sealed class TeacherDraftsApi(HttpClient http) : ITeacherDraftsApi
 {
     public async Task<List<TeacherDraftItemDto>> GetWeek(DateOnly weekStart, int? teacherId)
