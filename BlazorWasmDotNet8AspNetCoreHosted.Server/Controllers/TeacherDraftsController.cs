@@ -152,7 +152,8 @@ public sealed class TeacherDraftsController : ControllerBase
             IsRescheduled: rescheduleInfo.isRescheduled,
             RescheduledFromLessonTypeId: rescheduleInfo.originalLessonTypeId,
             BatchKey: i.BatchKey,
-            TeacherNames: teacherNames
+            TeacherNames: teacherNames,
+            LessonTypeCss: i.LessonType.CssKey
         );
         }).ToList();
     }
@@ -317,6 +318,7 @@ public sealed class TeacherDraftsController : ControllerBase
         var monday = ToMonday(monthStart);
         int created = 0, skipped = 0;
         var warnings = new List<string>();
+        var gapDetails = new List<AutoGenGapDetail>();
 
         while (monday < nextMonth)
         {
@@ -330,12 +332,21 @@ public sealed class TeacherDraftsController : ControllerBase
                 Days: r.Days
             ));
             var ok = (res.Result as OkObjectResult)?.Value as AutoGenResult;
-            if (ok is not null) { created += ok.Created; skipped += ok.Skipped; warnings.AddRange(ok.Warnings); }
+            if (ok is not null)
+            {
+                created += ok.Created;
+                skipped += ok.Skipped;
+                warnings.AddRange(ok.Warnings);
+                if (ok.GapDetails is not null)
+                {
+                    gapDetails.AddRange(ok.GapDetails);
+                }
+            }
 
             monday = monday.AddDays(7);
         }
 
-        return Ok(new AutoGenResult(created, skipped, warnings));
+        return Ok(new AutoGenResult(created, skipped, warnings, gapDetails));
     }
 
     [HttpPost("autogen/course")]
@@ -349,6 +360,7 @@ public sealed class TeacherDraftsController : ControllerBase
 
         int created = 0, skipped = 0;
         var warnings = new List<string>();
+        var gapDetails = new List<AutoGenGapDetail>();
 
         while (monday <= to)
         {
@@ -362,12 +374,21 @@ public sealed class TeacherDraftsController : ControllerBase
                 Days: r.Days
             ));
             var ok = (res.Result as OkObjectResult)?.Value as AutoGenResult;
-            if (ok is not null) { created += ok.Created; skipped += ok.Skipped; warnings.AddRange(ok.Warnings); }
+            if (ok is not null)
+            {
+                created += ok.Created;
+                skipped += ok.Skipped;
+                warnings.AddRange(ok.Warnings);
+                if (ok.GapDetails is not null)
+                {
+                    gapDetails.AddRange(ok.GapDetails);
+                }
+            }
 
             monday = monday.AddDays(7);
         }
 
-        return Ok(new AutoGenResult(created, skipped, warnings));
+        return Ok(new AutoGenResult(created, skipped, warnings, gapDetails));
     }
     /// <summary>
     /// Повертає понеділок тижня, до якого належить передана дата.
@@ -506,6 +527,13 @@ public sealed class TeacherDraftsController : ControllerBase
 
         var teachersForModule = await _db.TeacherModules.AsNoTracking().ToListAsync();
 
+        var teacherNames = await _db.Teachers
+            .AsNoTracking()
+            .ToDictionaryAsync(
+                t => t.Id,
+                t => string.IsNullOrWhiteSpace(t.FullName) ? $"#{t.Id}" : t.FullName!
+            );
+
         var teacherWorkingHours = await _db.TeacherWorkingHours.AsNoTracking()
             .Select(w => new { w.TeacherId, w.DayOfWeek, w.Start, w.End })
             .ToListAsync();
@@ -547,6 +575,8 @@ public sealed class TeacherDraftsController : ControllerBase
             .ToDictionary(g => g.Key, g => g.ToList());
         var topicUsageLimitById = topicsRaw
             .ToDictionary(t => t.Id, t => Math.Max(0, t.AuditoriumHours));
+        var moduleAuditoriumHours = topicsByModule
+            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Sum(t => Math.Max(0, t.AuditoriumHours)));
         var topicAssignmentsDraft = await _db.TeacherDraftItems
             .Where(di => di.ModuleTopicId != null && courseIds.Contains(di.Group.CourseId))
             .Select(di => new { di.GroupId, di.ModuleId, TopicId = di.ModuleTopicId!.Value })
@@ -618,7 +648,9 @@ public sealed class TeacherDraftsController : ControllerBase
         }
         int created = 0, skipped = 0;
         var warnings = new List<string>();
+        var gapDetails = new List<AutoGenGapDetail>();
         var gapWarnings = new HashSet<(int GroupId, DateOnly Date, TimeOnly Start, TimeOnly End)>();
+        var slotFailureReasons = new Dictionary<(int GroupId, DateOnly Date, TimeOnly Start, TimeOnly End), HashSet<string>>();
 
 
         bool TypeAllowed(int lessonTypeId)
@@ -822,10 +854,13 @@ public sealed class TeacherDraftsController : ControllerBase
             int n = courseGroups.Count;
             int baseShare = plan.TargetHours / n;
             int extra = plan.TargetHours % n;
+            var moduleMinHours = moduleAuditoriumHours.TryGetValue(plan.ModuleId, out var minHours) ? minHours : 0;
+
             for (int i = 0; i < n; i++)
             {
                 int gid = courseGroups[i].Id;
-                int target = baseShare + (i < extra ? 1 : 0);
+                int planShare = baseShare + (i < extra ? 1 : 0);
+                int target = Math.Max(planShare, moduleMinHours);
                 int fact = factMap.TryGetValue((gid, plan.ModuleId), out var c) ? c : 0;
                 remainingByGroupModule[(gid, plan.ModuleId)] = Math.Max(0, target - fact);
             }
@@ -861,10 +896,51 @@ public sealed class TeacherDraftsController : ControllerBase
                         firstGap = slot;
                         return true;
                     }
+
                 }
 
                 firstGap = null;
                 return false;
+            }
+
+            string TeacherLabel(int teacherId) =>
+                teacherNames.TryGetValue(teacherId, out var name) && !string.IsNullOrWhiteSpace(name)
+                    ? name
+                    : $"#{teacherId}";
+
+            void RecordSlotFailureReason(DateOnly date, TimeSlot slot, string reason)
+            {
+                var key = (grp.Id, date, slot.Start, slot.End);
+                if (!slotFailureReasons.TryGetValue(key, out var reasons))
+                {
+                    reasons = new HashSet<string>();
+                    slotFailureReasons[key] = reasons;
+                }
+                reasons.Add(reason);
+            }
+
+            void RecordSlotFailureReasonForAllSlots(DateOnly date, string reason)
+            {
+                foreach (var slot in slots)
+                {
+                    RecordSlotFailureReason(date, slot, reason);
+                }
+            }
+
+            string? ComposeGapReason(DateOnly date, TimeSlot slot)
+            {
+                var key = (grp.Id, date, slot.Start, slot.End);
+                if (slotFailureReasons.TryGetValue(key, out var reasons) && reasons.Count > 0)
+                {
+                    return string.Join("; ", reasons);
+                }
+
+                if (!remainingByGroupModule.Any(entry => entry.Key.GroupId == grp.Id && entry.Value > 0))
+                {
+                    return $"Для групи {grp.Name} більше не лишилось модулів із невикористаними годинами.";
+                }
+
+                return null;
             }
 
             void WarnGap(DateOnly date, TimeSlot gap)
@@ -873,7 +949,17 @@ public sealed class TeacherDraftsController : ControllerBase
                 var key = (grp.Id, date, gap.Start, gap.End);
                 if (gapWarnings.Add(key))
                 {
-                    warnings.Add($"Автогенерація не заповнила слот {label} для групи {grp.Name} на {date:yyyy-MM-dd}.");
+                    var reason = ComposeGapReason(date, gap);
+                    var reasonSuffix = string.IsNullOrWhiteSpace(reason) ? string.Empty : $" Причина: {reason}";
+                    warnings.Add($"Автогенерація не заповнила слот {label} для групи {grp.Name} на {date:yyyy-MM-dd}.{reasonSuffix}");
+                    gapDetails.Add(new AutoGenGapDetail(
+                        GroupId: grp.Id,
+                        GroupName: grp.Name,
+                        Date: date,
+                        Start: gap.Start,
+                        End: gap.End,
+                        SlotLabel: label,
+                        Reason: reason));
                 }
             }
 
@@ -1058,13 +1144,23 @@ public sealed class TeacherDraftsController : ControllerBase
                         warnings.Add($"Для модуля <{ModuleLabel()}> у групи {grp.Name} вичерпано теми. Пропустили розкладення.");
                     }
 
+                    var topicReason = $"Для модуля <{ModuleLabel()}> у групи {grp.Name} вичерпано теми для цього тижня.";
+                    RecordSlotFailureReasonForAllSlots(date, topicReason);
                     return false;
                 }
 
                 bool TooManySameThisDay() => CountModuleForDay(grp.Id, date, moduleId) >= 2;
-                if (TooManySameThisDay()) return false;
+                if (TooManySameThisDay())
+                {
+                    RecordSlotFailureReasonForAllSlots(date, $"Для модуля <{ModuleLabel()}> у групи {grp.Name} уже є дві пари на {date:dd.MM.yyyy}.");
+                    return false;
+                }
 
-                if (!isFiller && HadSameModulePreviousDay(grp.Id, moduleId, date)) return false;
+                if (!isFiller && HadSameModulePreviousDay(grp.Id, moduleId, date))
+                {
+                    RecordSlotFailureReasonForAllSlots(date, $"Для модуля <{ModuleLabel()}> у групи {grp.Name} вже розкладено пару напередодні, тому цей слот пропущено.");
+                    return false;
+                }
 
                 var tids = teachersForModule
                     .Where(x => x.ModuleId == moduleId)
@@ -1074,7 +1170,9 @@ public sealed class TeacherDraftsController : ControllerBase
                     .ToList();
                 if (tids.Count == 0)
                 {
-                    warnings.Add($"Не знайдено викладачів для модуля <{ModuleLabel()}> (група {grp.Name}).");
+                    var teacherReason = $"Не знайдено викладачів для модуля <{ModuleLabel()}> (група {grp.Name}).";
+                    RecordSlotFailureReasonForAllSlots(date, teacherReason);
+                    warnings.Add(teacherReason);
                     skipped++;
                     return false;
                 }
@@ -1087,6 +1185,8 @@ public sealed class TeacherDraftsController : ControllerBase
 
                     var s = sl.Start;
                     var e = sl.End;
+                    var slotLabel = $"{s:HH\\:mm}-{e:HH\\:mm}";
+                    var slotIssues = new HashSet<string>();
 
                     bool slotBreak = busy.Any(b => b.GroupId == grp.Id && b.Date == date
                                                    && b.LessonTypeId == typeBreakId && b.StartTime == s && b.EndTime == e);
@@ -1094,12 +1194,20 @@ public sealed class TeacherDraftsController : ControllerBase
 
                     foreach (var tidCandidate in tids)
                     {
-                        if (!TeacherFitsWorkingHours(tidCandidate, date, s, e)) continue;
+                        if (!TeacherFitsWorkingHours(tidCandidate, date, s, e))
+                        {
+                            slotIssues.Add($"Викладач {TeacherLabel(tidCandidate)} не працює у слоті {slotLabel}.");
+                            continue;
+                        }
 
                         bool peopleBusy = busy.Any(x => x.Date == date
                                                         && (x.GroupId == grp.Id || x.TeacherId == tidCandidate)
                                                         && x.StartTime < e && s < x.EndTime);
-                        if (peopleBusy) continue;
+                        if (peopleBusy)
+                        {
+                            slotIssues.Add($"Група {grp.Name} або викладач {TeacherLabel(tidCandidate)} зайняті у слоті {slotLabel}.");
+                            continue;
+                        }
 
                         var pickResult = PickLessonType(grp.Id, grp.CourseId, moduleId, date);
                         var ltypeId = pickResult.LessonTypeId;
@@ -1115,6 +1223,8 @@ public sealed class TeacherDraftsController : ControllerBase
                         {
                             if (candidateRooms.Count == 0)
                             {
+                                var roomReason = $"Не знайдено аудиторій для модуля <{ModuleLabel()}> (група {grp.Name}) у слоті {slotLabel}.";
+                                RecordSlotFailureReason(date, sl, roomReason);
                                 warnings.Add($"Не знайдено аудиторій для модуля <{ModuleLabel()}> (група {grp.Name}).");
                                 skipped++;
                                 return false;
@@ -1125,7 +1235,11 @@ public sealed class TeacherDraftsController : ControllerBase
                                 bool roomBusy = busy.Any(x => x.Date == date
                                                               && x.RoomId == rm.Id
                                                               && x.StartTime < e && s < x.EndTime);
-                                if (roomBusy) continue;
+                                if (roomBusy)
+                                {
+                                    slotIssues.Add($"Усі аудиторії для модуля <{ModuleLabel()}> зайняті у слоті {slotLabel}.");
+                                    continue;
+                                }
 
                                 var item = new TeacherDraftItem
                                 {
@@ -1238,6 +1352,14 @@ public sealed class TeacherDraftsController : ControllerBase
 
                             return true;
                         }
+
+                    }
+                    if (slotIssues.Count > 0)
+                    {
+                        foreach (var reason in slotIssues)
+                        {
+                            RecordSlotFailureReason(date, sl, reason);
+                        }
                     }
                 }
 
@@ -1252,10 +1374,37 @@ public sealed class TeacherDraftsController : ControllerBase
                 int maxPerDay = slots.Count;
                 if (maxPerDay == 0) continue;
 
+                var modulesAttemptedToday = new HashSet<int>();
+
+                async Task FillWithRemainingModulesAsync()
+                {
+                    foreach (var moduleId in orderedModules)
+                    {
+                        if (CountFor(grp.Id, date) >= maxPerDay)
+                        {
+                            break;
+                        }
+
+                        if (modulesAttemptedToday.Contains(moduleId))
+                        {
+                            continue;
+                        }
+
+                        if (RemainingFor(grp.Id, moduleId) <= 0)
+                        {
+                            continue;
+                        }
+
+                        modulesAttemptedToday.Add(moduleId);
+                        await TryPlaceModuleAsync(moduleId, date, isPrimary: false);
+                    }
+                }
+
                 var primaryModuleId = ResolvePrimaryModule();
                 bool placedPrimary = false;
                 if (primaryModuleId.HasValue)
                 {
+                    modulesAttemptedToday.Add(primaryModuleId.Value);
                     placedPrimary = await TryPlaceModuleAsync(primaryModuleId.Value, date, isPrimary: true);
                     if (placedPrimary
                         && RemainingFor(grp.Id, primaryModuleId.Value) > 0
@@ -1278,61 +1427,60 @@ public sealed class TeacherDraftsController : ControllerBase
                     return new Queue<int>(shuffled);
                 }
 
-                if (fillerModulesOrdered.Count == 0)
+                if (fillerModulesOrdered.Count > 0)
                 {
-                    if (DayHasGaps(date, out var firstGap) && firstGap is not null)
-                    {
-                        WarnGap(date, firstGap);
-                    }
+                    var fillerQueue = BuildFillerQueueForDay();
+                    int fillerAttempts = 0;
 
-                    continue;
+                    while (CountFor(grp.Id, date) < maxPerDay)
+                    {
+                        if (fillerQueue.Count == 0) break;
+
+                        var fillerModuleId = fillerQueue.Dequeue();
+                        if (RemainingFor(grp.Id, fillerModuleId) <= 0)
+                        {
+                            fillerAttempts++;
+                            if (fillerAttempts >= fillerModulesOrdered.Count)
+                            {
+                                break;
+                            }
+
+                            if (fillerQueue.Count == 0)
+                            {
+                                fillerQueue = BuildFillerQueueForDay();
+                            }
+                            continue;
+                        }
+
+                        modulesAttemptedToday.Add(fillerModuleId);
+                        var placedFiller = await TryPlaceModuleAsync(fillerModuleId, date, isPrimary: false);
+                        if (!placedFiller)
+                        {
+                            fillerAttempts++;
+                            if (fillerAttempts >= fillerModulesOrdered.Count)
+                            {
+                                break;
+                            }
+
+                            if (fillerQueue.Count == 0)
+                            {
+                                fillerQueue = BuildFillerQueueForDay();
+                            }
+                            continue;
+                        }
+
+                        fillerAttempts = 0;
+
+                        if (fillerQueue.Count == 0 && CountFor(grp.Id, date) < maxPerDay)
+                        {
+                            fillerQueue = BuildFillerQueueForDay();
+                        }
+                    }
                 }
 
-                var fillerQueue = BuildFillerQueueForDay();
-                int fillerAttempts = 0;
-
-                while (CountFor(grp.Id, date) < maxPerDay)
+                if (CountFor(grp.Id, date) < maxPerDay)
                 {
-                    if (fillerQueue.Count == 0) break;
-
-                    var fillerModuleId = fillerQueue.Dequeue();
-                    if (RemainingFor(grp.Id, fillerModuleId) <= 0)
-                    {
-                        fillerAttempts++;
-                        if (fillerAttempts >= fillerModulesOrdered.Count)
-                        {
-                            break;
-                        }
-
-                        if (fillerQueue.Count == 0)
-                        {
-                            fillerQueue = BuildFillerQueueForDay();
-                        }
-                        continue;
-                    }
-
-                    var placedFiller = await TryPlaceModuleAsync(fillerModuleId, date, isPrimary: false);
-                    if (!placedFiller)
-                    {
-                        fillerAttempts++;
-                        if (fillerAttempts >= fillerModulesOrdered.Count)
-                        {
-                            break;
-                        }
-
-                        if (fillerQueue.Count == 0)
-                        {
-                            fillerQueue = BuildFillerQueueForDay();
-                        }
-                        continue;
-                    }
-
-                    fillerAttempts = 0;
-
-                    if (fillerQueue.Count == 0 && CountFor(grp.Id, date) < maxPerDay)
-                    {
-                        fillerQueue = BuildFillerQueueForDay();
-                    }
+                    await FillWithRemainingModulesAsync();
                 }
 
                 if (DayHasGaps(date, out var remainingGap) && remainingGap is not null)
@@ -1343,7 +1491,7 @@ public sealed class TeacherDraftsController : ControllerBase
         }
 
         await _db.SaveChangesAsync();
-        return Ok(new AutoGenResult(created, skipped, warnings));
+        return Ok(new AutoGenResult(created, skipped, warnings, gapDetails));
     }
 
 
