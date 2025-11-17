@@ -12,6 +12,18 @@ public sealed class TeacherDraftsApi(HttpClient http) : ITeacherDraftsApi
         return await http.GetFromJsonAsync<List<TeacherDraftItemDto>>(url) ?? new();
     }
 
+    public async Task<byte[]> ExportWeek(DateOnly weekStart, int? teacherId, int? groupId, int? roomId)
+    {
+        var query = $"weekStart={weekStart:yyyy-MM-dd}";
+        if (teacherId is int tid) query += $"&teacherId={tid}";
+        if (groupId is int gid) query += $"&groupId={gid}";
+        if (roomId is int rid) query += $"&roomId={rid}";
+
+        var res = await http.GetAsync($"api/teacher-drafts/export?{query}");
+        await res.EnsureSuccessWithDetailsAsync();
+        return await res.Content.ReadAsByteArrayAsync();
+    }
+
     public async Task<AutoGenResult> AutogenWeek(AutoGenRequest req)
     {
         var res = await http.PostAsJsonAsync("api/teacher-drafts/autogen/week", req);

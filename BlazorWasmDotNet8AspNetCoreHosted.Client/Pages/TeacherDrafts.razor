@@ -25,6 +25,12 @@
     <button class="btn btn-ghost" @onclick="NextWeek">Наступний тиждень &gt;</button>
 </div>
 
+<div class="export-controls">
+    <button class="btn btn-primary" type="button" @onclick="ExportScheduleAsync" disabled="@_isExporting">
+        @(_isExporting ? "Генерую Excel..." : "Експорт в Excel")
+    </button>
+</div>
+
 @code {
     private MetaResponseDto? _meta;
 
@@ -42,6 +48,7 @@
     private List<ModuleTopicViewDto> TopicsForModule(int moduleId) => _topicsCache.TryGetValue(moduleId, out var list) ? list : new List<ModuleTopicViewDto>();
     private DraftUpsertRequest? _edit;
     private bool _unrestrictedMode;
+    private bool _isExporting;
     private readonly HashSet<int> _expandedWarningSlots = new();
     private readonly Dictionary<int, DraftValidationReportDto> _warningReports = new();
     private static readonly JsonSerializerOptions WarningJsonOptions = new()
@@ -122,6 +129,35 @@
             .ToList();
 
         SyncCurrentConflict();
+    }
+
+    private async Task ExportScheduleAsync()
+    {
+        if (_isExporting) return;
+        _isExporting = true;
+        _err = null;
+
+        try
+        {
+            var bytes = await DraftsApi.ExportWeek(_weekStart, _teacherId, _groupId, _roomId);
+            if (bytes is null || bytes.Length == 0)
+            {
+                _err = "Не вдалося сформувати файл Excel.";
+                return;
+            }
+
+            var fileName = $"Rozklad-{_weekStart:yyyyMMdd}.xlsx";
+            await using var module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/download.js");
+            await module.InvokeVoidAsync("downloadFromBytes", fileName, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", bytes);
+        }
+        catch (Exception ex)
+        {
+            _err = ex.Message;
+        }
+        finally
+        {
+            _isExporting = false;
+        }
     }
 
     private async Task PublishWeek()
@@ -2040,6 +2076,13 @@ else
         background: #fff;
         border: 1px solid #e5e7eb;
         border-radius: 16px;
+    }
+
+    .export-controls {
+        margin-top: 12px;
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
     }
 
     .week-label { color: #475569; font-weight: 600; }
