@@ -241,45 +241,39 @@ public sealed class TeacherDraftsController : ControllerBase
             var item = await _db.TeacherDraftItems.FirstOrDefaultAsync(x => x.Id == id);
             if (item is null) return NotFound(new { message = $"TeacherDraftItem {id} not found" });
 
-            item.Date = r.Date;
-            item.DayOfWeek = r.Date.ToDateTime(TimeOnly.MinValue).DayOfWeek;
-            item.StartTime = start;
-            item.EndTime = end;
-            item.GroupId = r.GroupId;
-            item.ModuleId = r.ModuleId;
-            item.ModuleTopicId = r.ModuleTopicId;
-            item.TeacherId = r.TeacherId;
-            item.RoomId = normalizedRoomId;
-            item.LessonTypeId = r.LessonTypeId;
-            item.IsLocked = r.IsLocked;
-            item.ValidationWarnings = reportJson;
-            item.Status = DraftStatus.Draft;
+            ApplyDraftRequest(item, r, start, end, normalizedRoomId, reportJson);
+            await _db.SaveChangesAsync();
+            return Ok(item.Id);
+        }
 
-            await _db.SaveChangesAsync();
-            return Ok(item.Id);
-        }
-        else
-        {
-            var item = new TeacherDraftItem
-            {
-                Date = r.Date,
-                DayOfWeek = r.Date.ToDateTime(TimeOnly.MinValue).DayOfWeek,
-                StartTime = start,
-                EndTime = end,
-                GroupId = r.GroupId,
-                ModuleId = r.ModuleId,
-                ModuleTopicId = r.ModuleTopicId,
-                TeacherId = r.TeacherId,
-                RoomId = normalizedRoomId,
-                LessonTypeId = r.LessonTypeId,
-                Status = DraftStatus.Draft,
-                IsLocked = r.IsLocked,
-                ValidationWarnings = reportJson
-            };
-            _db.TeacherDraftItems.Add(item);
-            await _db.SaveChangesAsync();
-            return Ok(item.Id);
-        }
+        var newItem = new TeacherDraftItem();
+        ApplyDraftRequest(newItem, r, start, end, normalizedRoomId, reportJson);
+        _db.TeacherDraftItems.Add(newItem);
+        await _db.SaveChangesAsync();
+        return Ok(newItem.Id);
+    }
+
+    private static void ApplyDraftRequest(
+        TeacherDraftItem item,
+        DraftUpsertRequest request,
+        TimeOnly start,
+        TimeOnly end,
+        int? normalizedRoomId,
+        string? validationReport)
+    {
+        item.Date = request.Date;
+        item.DayOfWeek = request.Date.ToDateTime(TimeOnly.MinValue).DayOfWeek;
+        item.StartTime = start;
+        item.EndTime = end;
+        item.GroupId = request.GroupId;
+        item.ModuleId = request.ModuleId;
+        item.ModuleTopicId = request.ModuleTopicId;
+        item.TeacherId = request.TeacherId;
+        item.RoomId = normalizedRoomId;
+        item.LessonTypeId = request.LessonTypeId;
+        item.IsLocked = request.IsLocked;
+        item.ValidationWarnings = validationReport;
+        item.Status = DraftStatus.Draft;
     }
 
     [HttpPost("clear-week")]
@@ -315,38 +309,17 @@ public sealed class TeacherDraftsController : ControllerBase
     {
         var monthStart = r.MonthStart;
         var nextMonth = new DateOnly(monthStart.Year, monthStart.Month, 1).AddMonths(1);
-        var monday = ToMonday(monthStart);
-        int created = 0, skipped = 0;
-        var warnings = new List<string>();
-        var gapDetails = new List<AutoGenGapDetail>();
+        var template = new DraftAutoGenRequest(
+            WeekStart: monthStart,
+            ClearExisting: true,
+            CourseId: r.CourseId,
+            GroupId: r.GroupId,
+            TeacherId: r.TeacherId,
+            AllowOnDaysOff: r.AllowOnDaysOff,
+            Days: r.Days
+        );
 
-        while (monday < nextMonth)
-        {
-            var res = await DraftAutoGen(new DraftAutoGenRequest(
-                WeekStart: monday,
-                ClearExisting: true,
-                CourseId: r.CourseId,
-                GroupId: r.GroupId,
-                TeacherId: r.TeacherId,
-                AllowOnDaysOff: r.AllowOnDaysOff,
-                Days: r.Days
-            ));
-            var ok = (res.Result as OkObjectResult)?.Value as AutoGenResult;
-            if (ok is not null)
-            {
-                created += ok.Created;
-                skipped += ok.Skipped;
-                warnings.AddRange(ok.Warnings);
-                if (ok.GapDetails is not null)
-                {
-                    gapDetails.AddRange(ok.GapDetails);
-                }
-            }
-
-            monday = monday.AddDays(7);
-        }
-
-        return Ok(new AutoGenResult(created, skipped, warnings, gapDetails));
+        return await RunAutoGenForWeeks(template, EnumerateWeekStarts(monthStart, week => week < nextMonth));
     }
 
     [HttpPost("autogen/course")]
@@ -355,47 +328,49 @@ public sealed class TeacherDraftsController : ControllerBase
     /// </summary>
     public async Task<ActionResult<AutoGenResult>> AutogenCourse([FromBody] AutogenCourseRequest r)
     {
-        var monday = ToMonday(r.From);
-        var to = r.To;
+        var template = new DraftAutoGenRequest(
+            WeekStart: r.From,
+            ClearExisting: true,
+            CourseId: r.CourseId,
+            GroupId: r.GroupId,
+            TeacherId: r.TeacherId,
+            AllowOnDaysOff: r.AllowOnDaysOff,
+            Days: r.Days
+        );
 
+        return await RunAutoGenForWeeks(template, EnumerateWeekStarts(r.From, week => week <= r.To));
+    }
+
+    private static IEnumerable<DateOnly> EnumerateWeekStarts(DateOnly reference, Func<DateOnly, bool> shouldInclude)
+    {
+        for (var week = DateHelpers.StartOfWeek(reference); shouldInclude(week); week = week.AddDays(7))
+        {
+            yield return week;
+        }
+    }
+
+    private async Task<ActionResult<AutoGenResult>> RunAutoGenForWeeks(DraftAutoGenRequest template, IEnumerable<DateOnly> weekStarts)
+    {
         int created = 0, skipped = 0;
         var warnings = new List<string>();
         var gapDetails = new List<AutoGenGapDetail>();
 
-        while (monday <= to)
+        foreach (var weekStart in weekStarts)
         {
-            var res = await DraftAutoGen(new DraftAutoGenRequest(
-                WeekStart: monday,
-                ClearExisting: true,
-                CourseId: r.CourseId,
-                GroupId: r.GroupId,
-                TeacherId: r.TeacherId,
-                AllowOnDaysOff: r.AllowOnDaysOff,
-                Days: r.Days
-            ));
-            var ok = (res.Result as OkObjectResult)?.Value as AutoGenResult;
-            if (ok is not null)
-            {
-                created += ok.Created;
-                skipped += ok.Skipped;
-                warnings.AddRange(ok.Warnings);
-                if (ok.GapDetails is not null)
-                {
-                    gapDetails.AddRange(ok.GapDetails);
-                }
-            }
+            var res = await DraftAutoGen(template with { WeekStart = weekStart });
+            if (res.Result is not OkObjectResult { Value: AutoGenResult ok }) continue;
 
-            monday = monday.AddDays(7);
+            created += ok.Created;
+            skipped += ok.Skipped;
+            warnings.AddRange(ok.Warnings);
+            if (ok.GapDetails is not null)
+            {
+                gapDetails.AddRange(ok.GapDetails);
+            }
         }
 
         return Ok(new AutoGenResult(created, skipped, warnings, gapDetails));
     }
-    /// <summary>
-    /// Повертає понеділок тижня, до якого належить передана дата.
-    /// </summary>
-    private static DateOnly ToMonday(DateOnly d)
-        => d.AddDays(-(((int)d.DayOfWeek + 6) % 7));
-
     [HttpPost("autogen")]
     /// <summary>
     /// Створює чернетки на основі правил і доступних даних для заданого тижня.
