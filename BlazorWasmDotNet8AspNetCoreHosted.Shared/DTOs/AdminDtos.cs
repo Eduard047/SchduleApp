@@ -86,11 +86,10 @@ public record class TeacherEditDto
 public record class TeacherLoadDto
 {
     public TeacherLoadDto() { }
-    public TeacherLoadDto(int courseId, int targetHours, bool isActive, int scheduledHours = 0)
-    { CourseId = courseId; TargetHours = targetHours; IsActive = isActive; ScheduledHours = scheduledHours; }
+    public TeacherLoadDto(int courseId, bool isActive, int scheduledHours = 0)
+    { CourseId = courseId; IsActive = isActive; ScheduledHours = scheduledHours; }
 
     public int CourseId { get; set; }
-    public int TargetHours { get; set; }
     public bool IsActive { get; set; }
     public int ScheduledHours { get; set; }
 }

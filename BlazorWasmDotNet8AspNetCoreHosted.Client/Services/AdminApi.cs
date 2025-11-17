@@ -9,6 +9,9 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
     {
         private readonly HttpClient _http = http;
 
+        private static string WithConfirm(string url)
+            => url.Contains('?') ? $"{url}&confirm=true" : $"{url}?confirm=true";
+
         private static async Task Ensure(HttpResponseMessage resp)
         {
             if (resp.IsSuccessStatusCode) return;
@@ -30,7 +33,7 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
             return (await resp.Content.ReadFromJsonAsync<int>())!;
         }
         public async Task DeleteCalendar(int id)
-            => await Ensure(await _http.DeleteAsync($"api/admin/config/calendar/{id}"));
+            => await Ensure(await _http.DeleteAsync(WithConfirm($"api/admin/config/calendar/{id}")));
 
         
         public async Task<List<LunchConfigEditDto>> GetLunch()
@@ -42,7 +45,7 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
             return (await resp.Content.ReadFromJsonAsync<int>())!;
         }
         public async Task DeleteLunch(int id)
-            => await Ensure(await _http.DeleteAsync($"api/admin/config/lunch/{id}"));
+            => await Ensure(await _http.DeleteAsync(WithConfirm($"api/admin/config/lunch/{id}")));
 
         
         public async Task<List<TeacherViewDto>> GetTeachers()
@@ -56,7 +59,7 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
             return (await resp.Content.ReadFromJsonAsync<int>())!;
         }
         public async Task DeleteTeacher(int id)
-            => await Ensure(await _http.DeleteAsync($"api/admin/teachers/{id}"));
+            => await Ensure(await _http.DeleteAsync(WithConfirm($"api/admin/teachers/{id}")));
 
         
         public async Task<List<GroupEditDto>> GetGroups()
@@ -68,7 +71,12 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
             return (await resp.Content.ReadFromJsonAsync<int>())!;
         }
         public async Task DeleteGroup(int id, bool force = false)
-            => await Ensure(await _http.DeleteAsync(force ? $"api/admin/groups/{id}?force=true" : $"api/admin/groups/{id}"));
+        {
+            var url = force
+                ? WithConfirm($"api/admin/groups/{id}?force=true")
+                : WithConfirm($"api/admin/groups/{id}");
+            await Ensure(await _http.DeleteAsync(url));
+        }
 
         
         public async Task<List<ModuleEditDto>> GetModules()
@@ -80,7 +88,7 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
             return (await resp.Content.ReadFromJsonAsync<int>())!;
         }
         public async Task DeleteModule(int id)
-            => await Ensure(await _http.DeleteAsync($"api/admin/modules/{id}"));
+            => await Ensure(await _http.DeleteAsync(WithConfirm($"api/admin/modules/{id}")));
         
         public async Task<List<ModuleTopicViewDto>> GetModuleTopics(int moduleId)
             => await _http.GetFromJsonAsync<List<ModuleTopicViewDto>>($"api/admin/modules/{moduleId}/topics") ?? new();
@@ -91,7 +99,7 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
             return (await resp.Content.ReadFromJsonAsync<int>())!;
         }
         public async Task DeleteModuleTopic(int moduleId, int topicId)
-            => await Ensure(await _http.DeleteAsync($"api/admin/modules/{moduleId}/topics/{topicId}"));
+            => await Ensure(await _http.DeleteAsync(WithConfirm($"api/admin/modules/{moduleId}/topics/{topicId}")));
 
         
         public async Task<List<RoomEditDto>> GetRooms()
@@ -103,7 +111,7 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
             return (await resp.Content.ReadFromJsonAsync<int>())!;
         }
         public async Task DeleteRoom(int id)
-            => await Ensure(await _http.DeleteAsync($"api/admin/rooms/{id}"));
+            => await Ensure(await _http.DeleteAsync(WithConfirm($"api/admin/rooms/{id}")));
 
         
         private sealed record BuildingsVm(List<BuildingEditDto> buildings, List<BuildingTravelEditDto> travels);
@@ -118,7 +126,7 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
             return (await resp.Content.ReadFromJsonAsync<int>())!;
         }
         public async Task DeleteBuilding(int id)
-            => await Ensure(await _http.DeleteAsync($"api/admin/buildings/{id}"));
+            => await Ensure(await _http.DeleteAsync(WithConfirm($"api/admin/buildings/{id}")));
         public async Task<int> UpsertBuildingTravel(BuildingTravelEditDto dto)
         {
             var resp = await _http.PostAsJsonAsync("api/admin/buildings/travel/upsert", dto);
@@ -126,7 +134,9 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
             return 0;
         }
         public async Task DeleteBuildingTravel(int fromId, int toId)
-            => await Ensure(await _http.PostAsJsonAsync("api/admin/buildings/travel/delete", new BuildingTravelEditDto(fromId, toId, 0)));
+            => await Ensure(await _http.PostAsJsonAsync(
+                WithConfirm("api/admin/buildings/travel/delete"),
+                new BuildingTravelEditDto(fromId, toId, 0)));
 
         
         public async Task<List<CourseEditDto>> GetCourses()
@@ -138,7 +148,12 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
             return (await resp.Content.ReadFromJsonAsync<int>())!;
         }
         public async Task DeleteCourse(int id, bool force = false)
-            => await Ensure(await _http.DeleteAsync(force ? $"api/admin/courses/{id}?force=true" : $"api/admin/courses/{id}"));
+        {
+            var url = force
+                ? WithConfirm($"api/admin/courses/{id}?force=true")
+                : WithConfirm($"api/admin/courses/{id}");
+            await Ensure(await _http.DeleteAsync(url));
+        }
 
         
         public async Task<List<LessonTypeEditDto>> GetLessonTypes()
@@ -146,7 +161,7 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
         public async Task UpsertLessonType(LessonTypeEditDto dto)
             => await Ensure(await _http.PostAsJsonAsync("api/admin/types/lesson/upsert", dto));
         public async Task DeleteLessonType(int id)
-            => await Ensure(await _http.DeleteAsync($"api/admin/types/lesson/{id}"));
+            => await Ensure(await _http.DeleteAsync(WithConfirm($"api/admin/types/lesson/{id}")));
 
         
         public async Task<List<LessonColorDto>> GetLessonColorPalette()

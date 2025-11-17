@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Domain.Entities;
 using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
@@ -130,6 +131,7 @@ public class AdminTypesController(AppDbContext db) : ControllerBase
     }
 
     [HttpDelete("lesson/{id:int}")]
+    [RequireDeletionConfirmation("тип заняття")]
     public async Task<IActionResult> LessonDelete(int id)
     {
         var used = await db.ScheduleItems.AnyAsync(s => s.LessonTypeId == id);

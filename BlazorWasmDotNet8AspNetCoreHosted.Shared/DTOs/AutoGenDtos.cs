@@ -20,8 +20,19 @@ public record AutoGenRequest(
     WeekPreset Days = WeekPreset.MonFri
 );
 
+public record AutoGenGapDetail(
+    int GroupId,
+    string GroupName,
+    DateOnly Date,
+    TimeOnly Start,
+    TimeOnly End,
+    string SlotLabel,
+    string? Reason
+);
+
 public record AutoGenResult(
     int Created,
     int Skipped,
-    List<string> Warnings
+    List<string> Warnings,
+    List<AutoGenGapDetail>? GapDetails = null
 );

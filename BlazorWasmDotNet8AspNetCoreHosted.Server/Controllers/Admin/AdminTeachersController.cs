@@ -1,6 +1,7 @@
 using System.Globalization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Domain.Entities;
 using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
@@ -33,7 +34,7 @@ public class AdminTeachersController(AppDbContext db) : ControllerBase
             AcademicTitle = t.AcademicTitle,
             ModuleIds = t.TeacherModules.Select(tm => tm.ModuleId).ToList(),
             Loads = loads
-                .Select(l => new TeacherLoadDto(l.CourseId, l.TargetHours, l.IsActive, l.ScheduledHours))
+                .Select(l => new TeacherLoadDto(l.CourseId, l.IsActive, l.ScheduledHours))
                 .ToList(),
             WorkingHours = wh
                 .Select(w => new TeacherWorkingHourDto((int)w.DayOfWeek, T(w.Start), T(w.End)))
@@ -51,7 +52,7 @@ public class AdminTeachersController(AppDbContext db) : ControllerBase
             scientificDegree: t.ScientificDegree,
             academicTitle: t.AcademicTitle,
             moduleIds: moduleIds,
-            loads: loads.Select(l => new TeacherLoadDto(l.CourseId, l.TargetHours, l.IsActive, l.ScheduledHours)).ToList(),
+            loads: loads.Select(l => new TeacherLoadDto(l.CourseId, l.IsActive, l.ScheduledHours)).ToList(),
             workingHours: wh.Select(w => new TeacherWorkingHourDto((int)w.DayOfWeek, T(w.Start), T(w.End))).ToList()
         );
 
@@ -180,8 +181,7 @@ public class AdminTeachersController(AppDbContext db) : ControllerBase
                 {
                     TeacherId = entity.Id,
                     CourseId = l.CourseId,
-                    TargetHours = l.TargetHours,
-                    ScheduledHours = prev?.ScheduledHours ?? 0,
+                    ScheduledHours = prev?.ScheduledHours ?? l.ScheduledHours,
                     IsActive = l.IsActive
                 };
             });
@@ -214,6 +214,7 @@ public class AdminTeachersController(AppDbContext db) : ControllerBase
 
     
     [HttpDelete("{id:int}")]
+    [RequireDeletionConfirmation("викладача")]
     public async Task<IActionResult> Delete(int id, [FromQuery] bool force = false)
     {
         var t = await db.Teachers.FirstOrDefaultAsync(x => x.Id == id);

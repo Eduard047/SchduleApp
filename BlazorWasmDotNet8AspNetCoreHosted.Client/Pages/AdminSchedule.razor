@@ -1,15 +1,60 @@
 @* Сторінка адміністрування розкладу *@
 @using System.Globalization
 @using System.Linq
+@using System.Collections.Generic
 @using System.Net
 @using System.Text.Json
 @using Microsoft.AspNetCore.Components
+@using Microsoft.JSInterop
 @using BlazorWasmDotNet8AspNetCoreHosted.Client.Services
 @using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
 
 @inject IScheduleApi Api
 @inject ITeacherDraftsApi Drafts
 @inject IJSRuntime JS
+
+<style>
+    .gap-detail-item {
+        padding: .3rem 0;
+        border-bottom: 1px dashed rgba(10, 120, 65, 0.3);
+    }
+    .gap-detail-item:last-child {
+        border-bottom: none;
+    }
+    .gap-reason {
+        font-weight: 700;
+        color: #064e3b;
+        margin: .15rem 0 0 1rem;
+    }
+    .gap-consequence {
+        font-size: .85rem;
+        color: #0f172a;
+        margin: .1rem 0 0 1.25rem;
+    }
+    .warning-item {
+        padding: .25rem 0;
+        border-bottom: 1px solid rgba(56, 189, 248, 0.3);
+    }
+    .warning-item:last-child {
+        border-bottom: none;
+    }
+    .warning-main {
+        font-weight: 600;
+        color: #0f766e;
+    }
+    .warning-reason {
+        font-size: .85rem;
+        color: #0f172a;
+        margin-left: 1rem;
+        margin-top: .1rem;
+    }
+    .warning-consequence {
+        font-size: .8rem;
+        color: #115e59;
+        margin-left: 1.25rem;
+        margin-top: .05rem;
+    }
+</style>
 
 @page "/admin/schedule"
 
@@ -115,12 +160,42 @@ else
                         @if (okWarningsExpanded)
                         {
                             <ul class="mb-0 mt-1 small">
-                                @foreach (var warn in okWarnings)
+                        @foreach (var warn in okWarnings)
+                        {
+                            var detail = ParseWarning(warn);
+                            <li class="warning-item">
+                                <div class="warning-main">@detail.Message</div>
+                                @if (!string.IsNullOrWhiteSpace(detail.Reason))
                                 {
-                                    <li>@warn</li>
+                                    <div class="warning-reason">Причина: @detail.Reason</div>
+                                    <div class="warning-consequence">Наслідок: слот потрібно заповнити вручну або перерозподілити години.</div>
                                 }
+                            </li>
+                        }
                             </ul>
                         }
+                    }
+                    @if (_latestGapDetails.Count > 0)
+                    {
+                        <div class="mt-2">
+                            <div class="fw-semibold small">Деталі пропущених слотів:</div>
+                            <ul class="mb-0 small">
+                                @foreach (var gap in _latestGapDetails)
+                                {
+                                    <li class="mb-1 gap-detail-item">
+                                        <div>
+                                            <span class="fw-semibold">@gap.GroupName</span>
+                                            – @gap.Date.ToString("dd.MM.yyyy") з @gap.SlotLabel.
+                                        </div>
+                                        @if (!string.IsNullOrWhiteSpace(gap.Reason))
+                                        {
+                                            <div class="gap-reason"><strong>Причина:</strong> @gap.Reason</div>
+                                            <div class="gap-consequence">Наслідок: слот лишається пустим, доведеться заповнити вручну або відкоригувати розклад.</div>
+                                        }
+                                    </li>
+                                }
+                            </ul>
+                        </div>
                     }
                 </div>
             </div>
@@ -278,6 +353,13 @@ else
     private string? error;
     private List<string> okWarnings = new();
     private bool okWarningsExpanded;
+    private List<AutoGenGapDetail> _latestGapDetails = new();
+    private const string AutoGenStatusStorageKey = "adminSchedule.autoGenStatus.v1";
+    private const string AutoGenStatusLocalStorageKey = "adminSchedule.autoGenStatus.local.v1";
+    private static readonly JsonSerializerOptions AutoGenStatusJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
     private readonly List<TeacherDraftItemDto> draftItems = new();
     private readonly List<ScheduleItemDto> publishedItems = new();
     private readonly List<TableItem> tableItems = new();
@@ -335,6 +417,7 @@ else
 
         await LoadConflictsAsync();
         await LoadWeek();
+        await RestorePersistedAutoGenStatusAsync();
     }
 
     private string CurrentWeekKey => GetMonday(_selectedDate).ToString("yyyy-MM-dd");
@@ -408,18 +491,28 @@ else
         }
     }
 
-    private void ResetStatus()
+    private async Task ResetStatusAsync(bool clearPersisted = true)
     {
         ok = error = null;
-        okWarnings.Clear();
+        okWarnings = new();
         okWarningsExpanded = false;
+        _latestGapDetails = new();
+        if (clearPersisted)
+        {
+            await RemovePersistedAutoGenStatusAsync();
+        }
     }
 
-    private void SetOkMessage(string message, IEnumerable<string>? warnings = null)
+    private async Task SetOkMessageAsync(string message, IEnumerable<string>? warnings = null, IEnumerable<AutoGenGapDetail>? gapDetails = null, bool persist = true)
     {
         ok = message;
         okWarnings = warnings?.Where(w => !string.IsNullOrWhiteSpace(w)).ToList() ?? new List<string>();
         okWarningsExpanded = false;
+        _latestGapDetails = gapDetails?.ToList() ?? new List<AutoGenGapDetail>();
+        if (persist)
+        {
+            await PersistAutoGenStatusAsync();
+        }
     }
 
     private void ToggleOkWarnings()
@@ -427,10 +520,138 @@ else
         okWarningsExpanded = !okWarningsExpanded;
     }
 
+    private (string Message, string? Reason) ParseWarning(string warning)
+    {
+        const string marker = "Причина:";
+        var idx = warning.IndexOf(marker, StringComparison.Ordinal);
+        if (idx < 0)
+        {
+            return (warning, null);
+        }
+
+        var message = warning[..idx].Trim();
+        var reason = warning[(idx + marker.Length)..].Trim();
+        return (string.IsNullOrWhiteSpace(message) ? warning : message, string.IsNullOrWhiteSpace(reason) ? null : reason);
+    }
+
+    private async Task PersistAutoGenStatusAsync()
+    {
+        var entry = BuildPersistedAutoGenStatus();
+        if (entry is null)
+        {
+            await RemovePersistedAutoGenStatusAsync();
+            return;
+        }
+
+        var statuses = await LoadPersistedAutoGenStatusesAsync();
+        statuses[CurrentWeekKey] = entry;
+        await SavePersistedAutoGenStatusesAsync(statuses);
+    }
+
+    private async Task RemovePersistedAutoGenStatusAsync()
+    {
+        var statuses = await LoadPersistedAutoGenStatusesAsync();
+        if (!statuses.Remove(CurrentWeekKey))
+        {
+            return;
+        }
+
+        await SavePersistedAutoGenStatusesAsync(statuses);
+    }
+
+    private async Task<Dictionary<string, PersistedAutoGenStatus>> LoadPersistedAutoGenStatusesAsync()
+    {
+        try
+        {
+            var stored = await ReadStorageAsync(AutoGenStatusStorageKey, useLocal: false);
+            if (string.IsNullOrWhiteSpace(stored))
+            {
+                stored = await ReadStorageAsync(AutoGenStatusLocalStorageKey, useLocal: true);
+            }
+
+            if (string.IsNullOrWhiteSpace(stored))
+                return new();
+
+            var statuses = JsonSerializer.Deserialize<Dictionary<string, PersistedAutoGenStatus>>(stored, AutoGenStatusJsonOptions);
+            return statuses ?? new();
+        }
+        catch (JSException)
+        {
+            await ClearPersistedAutoGenStorageAsync();
+            return new();
+        }
+        catch (JsonException)
+        {
+            await ClearPersistedAutoGenStorageAsync();
+            return new();
+        }
+    }
+
+    private async Task SavePersistedAutoGenStatusesAsync(Dictionary<string, PersistedAutoGenStatus> statuses)
+    {
+        if (statuses.Count == 0)
+        {
+            await ClearPersistedAutoGenStorageAsync();
+            return;
+        }
+
+        var json = JsonSerializer.Serialize(statuses, AutoGenStatusJsonOptions);
+        try
+        {
+            await SetStorageAsync(AutoGenStatusStorageKey, json, useLocal: false);
+            await SetStorageAsync(AutoGenStatusLocalStorageKey, json, useLocal: true);
+        }
+        catch (JSException)
+        {
+        }
+    }
+
+    private async Task ClearPersistedAutoGenStorageAsync()
+    {
+        try
+        {
+            await RemoveStorageAsync(AutoGenStatusStorageKey, useLocal: false);
+            await RemoveStorageAsync(AutoGenStatusLocalStorageKey, useLocal: true);
+        }
+        catch (JSException)
+        {
+        }
+    }
+
+    private ValueTask<string?> ReadStorageAsync(string key, bool useLocal)
+        => JS.InvokeAsync<string?>(useLocal ? "localStorage.getItem" : "sessionStorage.getItem", key);
+
+    private ValueTask SetStorageAsync(string key, string value, bool useLocal)
+        => JS.InvokeVoidAsync(useLocal ? "localStorage.setItem" : "sessionStorage.setItem", key, value);
+
+    private ValueTask RemoveStorageAsync(string key, bool useLocal)
+        => JS.InvokeVoidAsync(useLocal ? "localStorage.removeItem" : "sessionStorage.removeItem", key);
+
+    private PersistedAutoGenStatus? BuildPersistedAutoGenStatus()
+    {
+        if (string.IsNullOrWhiteSpace(ok))
+            return null;
+
+        return new PersistedAutoGenStatus(
+            Message: ok,
+            Warnings: new List<string>(okWarnings),
+            GapDetails: new List<AutoGenGapDetail>(_latestGapDetails)
+        );
+    }
+
+    private async Task RestorePersistedAutoGenStatusAsync()
+    {
+        var statuses = await LoadPersistedAutoGenStatusesAsync();
+        if (!statuses.TryGetValue(CurrentWeekKey, out var payload))
+            return;
+
+        await SetOkMessageAsync(payload.Message, payload.Warnings, payload.GapDetails, persist: false);
+    }
+
     
     private async Task AutoGenDrafts()
     {
-        ResetStatus();
+        await ResetStatusAsync();
         try
         {
             AutoGenResult? res = null;
@@ -492,7 +713,7 @@ else
                 return;
             }
 
-            SetOkMessage(summary, res.Warnings);
+            await SetOkMessageAsync(summary, res.Warnings, res.GapDetails);
 
             await LoadWeek();
         }
@@ -508,7 +729,7 @@ else
 
     private async Task ClearWeekForCurrent()
     {
-        ResetStatus();
+        await ResetStatusAsync();
         try
         {
             var monday = GetMonday(_selectedDate);
@@ -523,7 +744,7 @@ else
             ));
 
             await LoadWeek();
-            SetOkMessage($"Видалено {deleted} чернеток за поточний тиждень.");
+            await SetOkMessageAsync($"Видалено {deleted} чернеток за поточний тиждень.");
         }
         catch (ApiErrorException ex)
         {
@@ -537,7 +758,7 @@ else
 
     private async Task ClearWeekOfficial()
     {
-        ResetStatus();
+        await ResetStatusAsync();
         try
         {
             var monday = GetMonday(_selectedDate);
@@ -551,7 +772,7 @@ else
                 WeekStart: monday
             ));
 
-            SetOkMessage($"Видалено {deleted} записів з опублікованого розкладу.");
+            await SetOkMessageAsync($"Видалено {deleted} записів з опублікованого розкладу.");
         }
         catch (ApiErrorException ex)
         {
@@ -736,7 +957,9 @@ else
         if (DateOnly.TryParse(args.Value?.ToString(), out var value))
         {
             _selectedDate = value;
+            await ResetStatusAsync(clearPersisted: false);
             await LoadWeek();
+            await RestorePersistedAutoGenStatusAsync();
         }
     }
 
@@ -884,6 +1107,8 @@ else
         public bool Expanded { get; set; } = true;
         public string ToggleLabel => Expanded ? "Приховати" : "Розгорнути";
     }
+
+    private sealed record PersistedAutoGenStatus(string Message, List<string> Warnings, List<AutoGenGapDetail> GapDetails);
 
     private sealed record TableItem(
         int Id,

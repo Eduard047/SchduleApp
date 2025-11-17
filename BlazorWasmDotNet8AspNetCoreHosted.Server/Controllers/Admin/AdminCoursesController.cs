@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Domain.Entities;
 using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
@@ -43,6 +44,7 @@ public class AdminCoursesController(AppDbContext db) : ControllerBase
     }
 
     [HttpDelete("{id:int}")]
+    [RequireDeletionConfirmation("курс")]
     public async Task<IActionResult> Delete(int id, [FromQuery] bool force = false)
     {
         

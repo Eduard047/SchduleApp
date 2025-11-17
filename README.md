@@ -81,3 +81,9 @@ Design-time фабрика `DesignTimeDbContextFactory` зчитує `Connection
 - **`Unable to connect to any of the specified MySQL hosts`** — перевірте, чи запущено MySQL та чи правильні хост і порт у рядку підключення.
 - **`Connection string 'Default' is not configured`** — додайте рядок через Secret Manager, змінні середовища або локальний конфіг перед запуском EF чи сервера.
 - **CORS або 404 для API** — впевніться, що сервер активний, а клієнт звертається до актуального базового URL.
+
+## Додаткові матеріали
+
+- [operations-guide.md](operations-guide.md) - Покроковий посібник з операційного запуску проекту.
+- [database-setup.md](database-setup.md) - Інструкція з налаштування бази даних та підключення.
+

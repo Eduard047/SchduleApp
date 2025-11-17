@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Linq;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Application;
+using BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Domain.Entities;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
@@ -97,16 +98,7 @@ public class ScheduleController : ControllerBase
             var oldTeacherId = item.TeacherId;
             var oldCourseId = await _db.Groups.Where(g => g.Id == oldGroupId).Select(g => g.CourseId).FirstAsync();
 
-            item.Date = r.Date;
-            item.DayOfWeek = r.Date.ToDateTime(TimeOnly.MinValue).DayOfWeek;
-            item.StartTime = start;
-            item.EndTime = end;
-            item.GroupId = r.GroupId;
-            item.ModuleId = r.ModuleId;
-            item.RoomId = normalizedRoomId;
-            item.TeacherId = r.TeacherId;
-            item.LessonTypeId = r.LessonTypeId;
-            item.IsLocked = r.IsLocked;
+            ApplyScheduleRequest(item, r, start, end, normalizedRoomId);
 
             var recheck = await _rules.ValidateUpsertAsync(new UpsertScheduleItemRequest(
                 item.Id, item.Date, item.StartTime.ToString("HH:mm"), item.EndTime.ToString("HH:mm"),
@@ -138,19 +130,8 @@ public class ScheduleController : ControllerBase
         else
         {
             
-            var item = new ScheduleItem
-            {
-                Date = r.Date,
-                DayOfWeek = r.Date.ToDateTime(TimeOnly.MinValue).DayOfWeek,
-                StartTime = start,
-                EndTime = end,
-                GroupId = r.GroupId,
-                ModuleId = r.ModuleId,
-                RoomId = normalizedRoomId,
-                TeacherId = r.TeacherId,
-                LessonTypeId = r.LessonTypeId,
-                IsLocked = r.IsLocked
-            };
+            var item = new ScheduleItem();
+            ApplyScheduleRequest(item, r, start, end, normalizedRoomId);
             _db.ScheduleItems.Add(item);
 
             var recheck = await _rules.ValidateUpsertAsync(new UpsertScheduleItemRequest(
@@ -181,13 +162,21 @@ public class ScheduleController : ControllerBase
         }
     }
 
-    
-    private static DateOnly WeekStartMonday(DateOnly date)
+    private static void ApplyScheduleRequest(ScheduleItem item, UpsertScheduleItemRequest request, TimeOnly start, TimeOnly end, int? normalizedRoomId)
     {
-        var diff = ((int)date.DayOfWeek + 6) % 7;
-        return date.AddDays(-diff);
+        item.Date = request.Date;
+        item.DayOfWeek = request.Date.ToDateTime(TimeOnly.MinValue).DayOfWeek;
+        item.StartTime = start;
+        item.EndTime = end;
+        item.GroupId = request.GroupId;
+        item.ModuleId = request.ModuleId;
+        item.RoomId = normalizedRoomId;
+        item.TeacherId = request.TeacherId;
+        item.LessonTypeId = request.LessonTypeId;
+        item.IsLocked = request.IsLocked;
     }
 
+    
     private async Task TryCreateRescheduledCopyAsync(ScheduleItem source, int previousLessonTypeId, TimeOnly originalStart, TimeOnly originalEnd)
     {
         var prevType = await _db.LessonTypes.FindAsync(previousLessonTypeId);
@@ -202,7 +191,7 @@ public class ScheduleController : ControllerBase
             .FirstOrDefaultAsync();
         if (groupInfo is null) return;
 
-        var nextWeekStart = WeekStartMonday(source.Date).AddDays(7);
+        var nextWeekStart = DateHelpers.StartOfWeek(source.Date).AddDays(7);
         var earliestAllowed = nextWeekStart.ToDateTime(originalStart);
 
         
@@ -346,6 +335,7 @@ public class ScheduleController : ControllerBase
 
     
     [HttpDelete("{id:int}")]
+    [RequireDeletionConfirmation("запис розкладу")]
     public async Task<IActionResult> Delete(int id)
     {
         var info = await _db.ScheduleItems

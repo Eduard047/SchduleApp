@@ -63,7 +63,6 @@ public class TeacherCourseLoad
     public int CourseId { get; set; }
     public Course Course { get; set; } = default!;
 
-    public int TargetHours { get; set; }
     public int ScheduledHours { get; set; }
     public bool IsActive { get; set; } = true;
 }
@@ -248,6 +247,21 @@ public class LunchConfig
     public int? CourseId { get; set; }
     public TimeOnly Start { get; set; }
     public TimeOnly End { get; set; }
+}
+
+public class TimeSlot
+{
+    public int Id { get; set; }
+
+    public int? CourseId { get; set; }
+    [ForeignKey(nameof(CourseId))]
+    public Course? Course { get; set; }
+
+    public TimeOnly Start { get; set; }
+    public TimeOnly End { get; set; }
+
+    public int SortOrder { get; set; } = 0;
+    public bool IsActive { get; set; } = true;
 }
 
 public class CalendarException

@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Domain.Entities;
@@ -36,6 +37,7 @@ public class AdminRoomsController(AppDbContext db) : ControllerBase
     }
 
     [HttpDelete("{id:int}")]
+    [RequireDeletionConfirmation("аудиторію")]
     public async Task<IActionResult> Delete(int id, [FromQuery] bool force = false)
     {
         var exists = await db.Rooms.AnyAsync(r => r.Id == id);

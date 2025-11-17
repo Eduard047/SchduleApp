@@ -4,8 +4,9 @@ using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 public interface ITeacherDraftsApi
 {
     Task<List<TeacherDraftItemDto>> GetWeek(DateOnly weekStart, int? teacherId);
+    Task<byte[]> ExportWeek(DateOnly weekStart, int? teacherId, int? groupId, int? roomId);
     Task<int> Upsert(DraftUpsertRequest req);
-    Task Delete(int id);
+    Task Delete(int id, bool confirm = false);
     Task<AutoGenResult> AutogenWeek(AutoGenRequest req);
     Task<int> ClearWeek(ClearWeekRequest req);
 
@@ -13,3 +14,4 @@ public interface ITeacherDraftsApi
     Task<AutoGenResult> AutogenCourse(AutogenCourseRequest req);
     Task PublishWeek(PublishWeekRequest req);
 }
+

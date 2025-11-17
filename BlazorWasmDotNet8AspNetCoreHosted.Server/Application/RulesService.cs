@@ -144,15 +144,6 @@ public sealed class RulesService(AppDbContext db)
             }
         }
 
-        if (ltype?.CountInLoad == true && r.TeacherId is int tId && group is not null)
-        {
-            var load = await db.TeacherCourseLoads
-                .FirstOrDefaultAsync(l => l.TeacherId == tId && l.CourseId == group.CourseId && l.IsActive);
-
-            if (load is not null && load.ScheduledHours >= load.TargetHours)
-                warnings.Add("Навантаження викладача вже виконано.");
-        }
-
         return (errors, warnings);
     }
 
@@ -384,19 +375,11 @@ public sealed class RulesService(AppDbContext db)
             }
         }
 
-        if (ltype?.CountInLoad == true && r.TeacherId is int tId && group is not null)
-        {
-            var load = await db.TeacherCourseLoads
-                .FirstOrDefaultAsync(l => l.TeacherId == tId && l.CourseId == group.CourseId && l.IsActive);
-
-            if (load is not null && load.ScheduledHours >= load.TargetHours)
-                AddWarning("teacher-load-exceeded", "Перевищено навантаження", $"Викладач виконав {load.ScheduledHours} із {load.TargetHours} запланованих занять.");
-        }
-
         var report = new DraftValidationReportDto(DateTimeOffset.UtcNow, issues);
         return new DraftValidationResult(errors, warnings, report);
     }
 }
+
 
 
 

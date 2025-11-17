@@ -1,7 +1,8 @@
-@* Сторінка адміністрування будівель *@
+﻿@* Сторінка адміністрування будівель *@
 @page "/admin/buildings"
 @using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
 @inject BlazorWasmDotNet8AspNetCoreHosted.Client.Services.IAdminApi Admin
+@inject IJSRuntime JS
 
 <PageTitle>Адмін • Корпуси</PageTitle>
 
@@ -231,6 +232,10 @@ else
     {
         try
         {
+            var caption = NameOf(id);
+            var confirmed = await JS.InvokeAsync<bool>("confirm", $"Видалити корпус {caption}? Дію не можна скасувати.");
+            if (!confirmed) return;
+
             await Admin.DeleteBuilding(id);
             await Load();
             ok = "Видалено.";
@@ -261,6 +266,11 @@ else
     {
         try
         {
+            var fromCaption = NameOf(t.FromBuildingId);
+            var toCaption = NameOf(t.ToBuildingId);
+            var confirmed = await JS.InvokeAsync<bool>("confirm", $"Видалити маршрут {fromCaption} -> {toCaption}? Дію не можна скасувати.");
+            if (!confirmed) return;
+
             await Admin.DeleteBuildingTravel(t.FromBuildingId, t.ToBuildingId);
             await Load();
             ok = "Видалено.";

@@ -51,4 +51,6 @@
   dotnet ef migrations remove --project BlazorWasmDotNet8AspNetCoreHosted.Server
   ```
 
+Важливо: коли оновлюєте версію застосунку на сервері, проганяйте міграції через `dotnet ef database update --project BlazorWasmDotNet8AspNetCoreHosted.Server`.
+
 > **Примітка:** наявні міграції створюють структуру БД, але не додають початкових записів. Якщо Вам потрібні стартові дані, підготуйте окремий сидинг або SQL-скрипт, що можна запускати після `dotnet ef database update`.

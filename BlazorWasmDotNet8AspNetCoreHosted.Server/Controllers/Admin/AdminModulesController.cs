@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Domain.Entities;
 using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
@@ -200,6 +201,7 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
     
     
     [HttpDelete("{id:int}")]
+    [RequireDeletionConfirmation("модуль")]
     public async Task<IActionResult> Delete(int id, [FromQuery] bool force = false)
     {
         var module = await db.Modules.AsNoTracking().FirstOrDefaultAsync(m => m.Id == id);
@@ -411,6 +413,7 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
     }
 
     [HttpDelete("{moduleId:int}/topics/{topicId:int}")]
+    [RequireDeletionConfirmation("тему модуля")]
     public async Task<IActionResult> DeleteTopic(int moduleId, int topicId)
     {
         var topic = await db.ModuleTopics.FirstOrDefaultAsync(t => t.Id == topicId && t.ModuleId == moduleId);

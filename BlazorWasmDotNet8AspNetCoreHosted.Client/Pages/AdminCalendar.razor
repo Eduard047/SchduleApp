@@ -1,7 +1,8 @@
-@* Сторінка керування календарними винятками *@
+﻿@* Сторінка керування календарними винятками *@
 @page "/admin/calendar"
 @using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
 @inject BlazorWasmDotNet8AspNetCoreHosted.Client.Services.IAdminApi Admin
+@inject IJSRuntime JS
 
 <PageTitle>Адмін • Календар</PageTitle>
 
@@ -162,6 +163,11 @@
     {
         try
         {
+            var item = items.FirstOrDefault(x => x.Id == id);
+            var caption = item is null ? $"#{id}" : $"{item.Date} — {item.Name}";
+            var confirmed = await JS.InvokeAsync<bool>("confirm", $"Видалити виняток {caption}? Дію не можна скасувати.");
+            if (!confirmed) return;
+
             await Admin.DeleteCalendar(id);
             await Load();
             ok = "Видалено.";
