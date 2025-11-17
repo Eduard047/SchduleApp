@@ -405,6 +405,14 @@ public sealed class TeacherDraftsController : ControllerBase
 
     private static string BuildExportCell(TeacherDraftItemDto item)
     {
+        if (IsBreakLesson(item.LessonTypeCode) || IsCanceledLesson(item.LessonTypeCode))
+        {
+            var summary = new List<string> { item.LessonTypeName };
+            if (item.IsRescheduled) summary.Add("Перенесено");
+            if (item.Status == DraftStatusDto.Published) summary.Add("Опубліковано");
+            return string.Join(Environment.NewLine, summary.Where(x => !string.IsNullOrWhiteSpace(x)));
+        }
+
         var entries = new List<string>();
         if (!string.IsNullOrWhiteSpace(item.Module)) entries.Add(item.Module);
         if (!string.IsNullOrWhiteSpace(item.TopicCode)) entries.Add(item.TopicCode);
@@ -422,6 +430,12 @@ public sealed class TeacherDraftsController : ControllerBase
 
         return string.Join(Environment.NewLine, entries.Where(x => !string.IsNullOrWhiteSpace(x)));
     }
+
+    private static bool IsBreakLesson(string? lessonTypeCode)
+        => string.Equals(lessonTypeCode, "BREAK", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsCanceledLesson(string? lessonTypeCode)
+        => string.Equals(lessonTypeCode, "CANCELED", StringComparison.OrdinalIgnoreCase);
 
     private static readonly string[] UkrainianDayNames =
     {
