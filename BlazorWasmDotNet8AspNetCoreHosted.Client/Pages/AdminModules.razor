@@ -289,98 +289,56 @@
             <div class="table-responsive mt-3">
                 <table class="table table-sm align-middle module-topics-table">
                     <thead>
-
                         <tr>
-
                             <th class="text-nowrap">Код</th>
-
                             <th class="text-nowrap">Тип</th>
-
                             <th class="text-nowrap">Годин всього</th>
-
                             <th class="text-nowrap">Годин аудиторних</th>
-
                             <th class="text-nowrap">Годин самостійних</th>
-
-
                             <th class="module-topics-col-groups">Заплановані групи</th>
-
                             <th class="module-topics-col-groups">Відпрацьовані групи</th>
-
                             <th class="module-topics-col-actions"></th>
 
                         </tr>
 
                     </thead>
                     <tbody>
-
                         @if (moduleTopics.Count == 0)
-
                         {
-
                             <tr>
-
                                 <td colspan="8" class="text-muted text-center">Немає записів.</td>
-
                             </tr>
-
                         }
-
                         else
-
                         {
-
                             foreach (var topic in moduleTopics)
-                        
                             {
-
                                 <tr>
-
                                     <td>@topic.TopicCode</td>
-
                                     <td>@topic.LessonTypeName</td>
-
                                     <td>@topic.TotalHours</td>
-
                                     <td>@topic.AuditoriumHours</td>
-
                                     <td>@topic.SelfStudyHours</td>
                                     <td class="module-topics-col-groups">
-
                                         <span class="topic-text-truncate" title="@string.Join(", ", topic.PlannedGroups)">
-
                                             @string.Join(", ", topic.PlannedGroups)
-
                                         </span>
-
                                     </td>
 
                                     <td class="module-topics-col-groups">
-
                                         <span class="topic-text-truncate" title="@string.Join(", ", topic.CompletedGroups)">
-
                                             @string.Join(", ", topic.CompletedGroups)
-
                                         </span>
-
                                     </td>
 
                                     <td class="module-topics-col-actions text-end">
-
                                         <div class="btn-group btn-group-sm me-1 mb-1 mb-sm-0">
-
                                             <button class="btn btn-outline-secondary" @onclick="() => EditTopic(topic)">Редагувати</button>
-
                                             <button class="btn btn-outline-danger" @onclick="() => DeleteTopic(topic.Id)">Видалити</button>
-
                                         </div>
-
                                     </td>
-
                                 </tr>
-
                             }
-
                         }
 
                     </tbody>
