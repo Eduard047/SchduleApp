@@ -53,7 +53,10 @@ public sealed class AdminPlansController : ControllerBase
             .ToListAsync();
 
         var excludePlanIds = lessonTypes
-            .Where(t => !t.CountInPlan && !string.Equals(t.Code, "CANCELED", System.StringComparison.OrdinalIgnoreCase))
+            .Where(t =>
+                !t.CountInPlan
+                || string.Equals(t.Code, "CANCELED", System.StringComparison.OrdinalIgnoreCase)
+                || string.Equals(t.Code, "RESCHEDULED", System.StringComparison.OrdinalIgnoreCase))
             .Select(t => t.Id)
             .ToHashSet();
 

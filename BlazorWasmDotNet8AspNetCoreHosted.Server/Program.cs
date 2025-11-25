@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Infrastructure;
 using Pomelo.EntityFrameworkCore.MySql.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Application;
+using BlazorWasmDotNet8AspNetCoreHosted.Server.Infrastructure.Seed;
 
 // Точка входу для налаштування серверного застосунку
 var builder = WebApplication.CreateBuilder(args);
@@ -39,5 +40,7 @@ app.UseStaticFiles();
 app.MapRazorPages();
 app.MapControllers();
 app.MapFallbackToFile("index.html");
+
+await DefaultLessonTypesSeeder.SeedAsync(app.Services);
 
 app.Run();

@@ -540,6 +540,9 @@
     private bool CanDragItem(TeacherDraftItemDto? item)
         => item is { IsLocked: false };
 
+    private bool CanDeleteItem(TeacherDraftItemDto item)
+        => !item.IsLocked || _unrestrictedMode;
+
     private string GetCellFrameCss(SlotKey key, TeacherDraftItemDto? item)
     {
         var css = "td-cell";
@@ -856,12 +859,24 @@
     private async Task DeleteEdit()
     {
         if (_edit?.Id is not int id) { _err = "Виберіть чернетку для видалення."; return; }
-        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Видалити чернетку #{id}? Дію не можна скасувати.");
+        await DeleteByIdAsync(id);
+    }
+
+    private async Task DeleteItemAsync(TeacherDraftItemDto item)
+    {
+        await DeleteByIdAsync(item.Id);
+    }
+
+    private async Task DeleteByIdAsync(int id)
+    {
+        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Видалити пару #{id}? Цю дію неможливо скасувати.");
         if (!confirmed) return;
         try
         {
-            await DraftsApi.Delete(id, confirm: true);
+            await DraftsApi.Delete(id, confirm: true, unrestricted: _unrestrictedMode);
             _ok = $"Видалено (Id = {id}).";
+            _edit = null;
+            _extraAssignments.Clear();
             await Reload();
         }
         catch (ApiErrorException ex)
@@ -1042,10 +1057,10 @@
 
     static string CssByCode(string code) => code switch
     {
-        "LECTURE" => "lec",
-        "SEMINAR" => "sem",
-        "LAB" => "lab",
-        "PRACTICE" => "prc",
+        "LECTURE" => "c1",
+        "SEMINAR" => "c2",
+        "LAB" => "c3",
+        "PRACTICE" => "c4",
         "CANCELED" => "can",
         "RESCHEDULED" => "res",
         "BREAK" => "brk",
@@ -1326,8 +1341,14 @@ else
                                                 <div class="td-cell-title">@item.LessonTypeName</div>
                                                 <div class="td-cell-meta">@slot.Label</div>
                                                 <div class="td-cell-actions">
-                                                    <button class="btn btn-ghost btn-sm td-edit-btn text-danger" title="╨а╨╡╨┤╨░╨│╤Г╨▓╨░╤В╨╕" @onclick="async () => await StartEdit(item)">
+                                                    <button class="btn btn-ghost btn-sm td-edit-btn text-danger" title="Редагувати" @onclick="async () => await StartEdit(item)">
                                                         <span class="td-edit-icon" aria-hidden="true">✎</span>
+                                                    </button>
+                                                    <button class="btn btn-ghost btn-sm td-edit-btn text-danger"
+                                                            title="Видалити"
+                                                            disabled="@(!CanDeleteItem(item))"
+                                                            @onclick="async () => await DeleteItemAsync(item)">
+                                                        <span class="td-edit-icon" aria-hidden="true">🗑</span>
                                                     </button>
                                                 </div>
                                             }
@@ -1402,9 +1423,17 @@ else
                                                 }
                                                 <div class="td-cell-footer">
                                                     <span class="badge @GetStatusBadgeCss(item.Status)">@FormatStatus(item.Status)</span>
-                                                    <button class="btn btn-ghost btn-sm td-edit-btn text-danger" title="Редагувати" @onclick="async () => await StartEdit(item)">
-                                                        <span class="td-edit-icon" aria-hidden="true">✎</span>
-                                                    </button>
+                                                    <div class="td-cell-actions">
+                                                        <button class="btn btn-ghost btn-sm td-edit-btn text-danger" title="Редагувати" @onclick="async () => await StartEdit(item)">
+                                                            <span class="td-edit-icon" aria-hidden="true">✎</span>
+                                                        </button>
+                                                        <button class="btn btn-ghost btn-sm td-edit-btn text-danger"
+                                                                title="Видалити"
+                                                                disabled="@(!CanDeleteItem(item))"
+                                                                @onclick="async () => await DeleteItemAsync(item)">
+                                                            <span class="td-edit-icon" aria-hidden="true">🗑</span>
+                                                        </button>
+                                                    </div>
                                                 </div>
                                             }
                                         </div>
@@ -1421,17 +1450,23 @@ else
 
 @if (_edit is not null && _meta is not null)
 {
-    
-    <div class="editor">
-        <div class="editor-title">Редактор чернетки</div>
-        @{
-            var moduleTopics = TopicsForModule(_edit!.ModuleId);
-            var selectedModule = _meta.Modules.FirstOrDefault(m => m.Id == _edit!.ModuleId);
-            var selectedTopic = _edit!.ModuleTopicId is int topicId
-                ? moduleTopics.FirstOrDefault(t => t.Id == topicId)
-                : null;
-        }
-        <div class="editor-grid">
+    <div class="editor-overlay" @onclick="CancelEdit">
+        <div class="editor editor-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+            <div class="editor-modal-head">
+                <div>
+                    <div class="editor-title">Редагування пари</div>
+                    <div class="editor-subtitle">@_edit!.Date.ToString("dd.MM.yyyy") · @_edit!.TimeStart-@_edit!.TimeEnd</div>
+                </div>
+                <button type="button" class="btn btn-ghost editor-close" title="Закрити" @onclick="CancelEdit">×</button>
+            </div>
+            @{
+                var moduleTopics = TopicsForModule(_edit!.ModuleId);
+                var selectedModule = _meta.Modules.FirstOrDefault(m => m.Id == _edit!.ModuleId);
+                var selectedTopic = _edit!.ModuleTopicId is int topicId
+                    ? moduleTopics.FirstOrDefault(t => t.Id == topicId)
+                    : null;
+            }
+            <div class="editor-grid">
             <div class="editor-field">
                 <label>Дата</label>
                 <input type="date" class="select"
@@ -1459,6 +1494,17 @@ else
                     @foreach (var g in _meta.Groups)
                     {
                         <option value="@g.Id" selected="@(@g.Id == _edit!.GroupId)">@g.Name</option>
+                    }
+                </select>
+            </div>
+
+            <div class="editor-field">
+                <label>Викладач</label>
+                <select class="select" @onchange="e => _edit = _edit! with { TeacherId = int.TryParse((string?)e.Value, out var v) ? v : (int?)null }">
+                    <option value="">(без викладача)</option>
+                    @foreach (var t in _meta.Teachers)
+                    {
+                        <option value="@t.Id" selected="@(@t.Id == _edit!.TeacherId)">@t.Name</option>
                     }
                 </select>
             </div>
@@ -1506,18 +1552,7 @@ else
                 </select>
             </div>
 
-            <div class="editor-field">
-                <label>Викладач</label>
-                <select class="select" @onchange="e => _edit = _edit! with { TeacherId = int.TryParse((string?)e.Value, out var v) ? v : (int?)null }">
-                    <option value="">(без викладача)</option>
-                    @foreach (var t in _meta.Teachers)
-                    {
-                        <option value="@t.Id" selected="@(@t.Id == _edit!.TeacherId)">@t.Name</option>
-                    }
-                </select>
-            </div>
-
-            <div class="editor-field">
+            <div class="editor-field editor-field--align-right">
                 <label>
                     Аудиторія
                     <span class="td-room-mode @(_edit.RequiresRoom ? "td-room-mode--required" : "td-room-mode--optional")">@DraftLessonModeLabel(_edit.RequiresRoom)</span>
@@ -1594,6 +1629,7 @@ else
                 <button class="btn btn-ghost" @onclick="DeleteEdit">Видалити</button>
             }
             <button class="btn btn-ghost" @onclick="CancelEdit">Скасувати</button>
+        </div>
         </div>
     </div>
 }
@@ -1919,14 +1955,21 @@ else
         font-style: italic;
     }
 
-    .td-cell-body--lec { border-color: #cfe1ff; background: #eef4ff; }
-    .td-cell-body--sem { border-color: #bbf7d0; background: #edfcf2; }
-    .td-cell-body--lab { border-color: #fde68a; background: #fff8e6; }
-    .td-cell-body--prc { border-color: #ddd6fe; background: #f5f3ff; }
-    .td-cell-body--c7 { border-color: #c7ddff; background: #e7f4ff; }
-    .td-cell-body--c8 { border-color: #99f6e4; background: #e6fff5; }
-    .td-cell-body--c9 { border-color: #fcd34d; background: #fffbe6; }
-    .td-cell-body--c10 { border-color: #d8b4fe; background: #f3e8ff; }
+    .td-cell-body--c1  { border-color: #9dcfff; background: #c9e6ff; }
+    .td-cell-body--c2  { border-color: #8feabc; background: #b6f4d2; }
+    .td-cell-body--c3  { border-color: #ffc76c; background: #ffe2a9; }
+    .td-cell-body--c4  { border-color: #cfa6ff; background: #e6d0ff; }
+    .td-cell-body--res { border-color: #89dcff; background: #b0ebff; color: #0369a1; }
+    .td-cell-body--c7  { border-color: #9fcbff; background: #cde3ff; }
+    .td-cell-body--c8  { border-color: #89e8c1; background: #c3f7e3; }
+    .td-cell-body--c9  { border-color: #ffd067; background: #ffe9a6; }
+    .td-cell-body--c10 { border-color: #bb9dff; background: #d8c3ff; }
+    .td-cell-body--c11 { border-color: #ff9a83; background: #ffb8a8; }
+    .td-cell-body--c12 { border-color: #ee9fff; background: #f7c6ff; }
+    .td-cell-body--c13 { border-color: #82d6ff; background: #a9e7ff; }
+    .td-cell-body--c14 { border-color: #b5e57a; background: #d6f5a3; }
+    .td-cell-body--c15 { border-color: #ffbd8b; background: #ffd2b3; }
+    .td-cell-body--c16 { border-color: #b3becd; background: #ced7e5; }
 
     .td-cell-body--brk,
     .td-cell-body--break {
@@ -1946,12 +1989,6 @@ else
         text-decoration: line-through;
     }
 
-
-    .td-cell-body--res {
-        border-color: #bae6fd;
-        background: #e0f2fe;
-        color: #0369a1;
-    }
 
     .td-cell-body--locked { box-shadow: inset 4px 0 0 #2563eb; }
     .td-cell-body--published { box-shadow: 0 0 0 1px #22c55e inset; }
@@ -2055,7 +2092,7 @@ else
         gap: .4rem;
     }
 
-    .td-cell-actions { display: flex; justify-content: flex-end; }
+    .td-cell-actions { display: flex; justify-content: flex-end; gap: 8px; }
     .td-empty { font-weight: 500; user-select: none; -webkit-user-select: none; }
 
     .badge {
@@ -2085,6 +2122,19 @@ else
 
     .week-label { color: #475569; font-weight: 600; }
 
+    .editor-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, .45);
+        backdrop-filter: blur(2px);
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        padding: 72px 24px 24px;
+        overflow-y: auto;
+        z-index: 2400;
+    }
+
     .editor {
         margin-top: 14px;
         background: #fff;
@@ -2093,7 +2143,26 @@ else
         padding: 12px;
     }
 
+    .editor-modal {
+        margin-top: 0;
+        width: min(1100px, 100%);
+        box-shadow: 0 20px 50px rgba(15, 23, 42, .25);
+        max-height: calc(100vh - 80px);
+        overflow-y: auto;
+        position: relative;
+    }
+
+    .editor-modal-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 10px;
+    }
+
     .editor-title { font-weight: 800; margin-bottom: 8px; }
+    .editor-subtitle { color: #475569; font-size: .9rem; margin-top: 4px; }
+    .editor-close { min-width: 42px; height: 42px; font-size: 1.35rem; padding: 0 .6rem; }
 
     .editor-grid {
         display: grid;
@@ -2109,6 +2178,7 @@ else
     }
 
     .editor-field--wide { grid-column: span 2; }
+    .editor-field--align-right { justify-self: end; }
 
     .editor-field label {
         display: flex;
@@ -2353,4 +2423,3 @@ else
         word-break: break-word;
     }
 </style>
-

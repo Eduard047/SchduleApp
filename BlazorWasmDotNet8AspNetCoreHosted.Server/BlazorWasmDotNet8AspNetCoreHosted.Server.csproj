@@ -21,7 +21,7 @@
       </PackageReference>
       <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="8.0.3" />
       <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
-      <PackageReference Include="ClosedXML" Version="0.104.6" />
+      <PackageReference Include="ClosedXML" Version="0.105.0" />
     </ItemGroup>
 
   <ItemGroup>
