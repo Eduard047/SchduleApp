@@ -19,7 +19,13 @@ public static class Mapping
             (ltCode.Equals("BREAK", StringComparison.OrdinalIgnoreCase) ? "brk" : null);
 
         var isBreak = ltCode.Equals("BREAK", StringComparison.OrdinalIgnoreCase);
+        var isRescheduled = ltCode.Equals("RESCHEDULED", StringComparison.OrdinalIgnoreCase);
+        var isCanceled = ltCode.Equals("CANCELED", StringComparison.OrdinalIgnoreCase);
         var requiresRoom = lt?.RequiresRoom ?? true;
+        if ((isCanceled || isRescheduled) && x.RoomId is not null)
+        {
+            requiresRoom = true;
+        }
 
         var roomName = (!isBreak && requiresRoom && x.Room != null) ? x.Room.Name : "";
         var buildingName = (!isBreak && requiresRoom && x.Room?.Building != null) ? x.Room.Building.Name : "";

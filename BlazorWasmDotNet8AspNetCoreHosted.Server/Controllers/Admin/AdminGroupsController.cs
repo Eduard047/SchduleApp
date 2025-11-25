@@ -71,7 +71,13 @@ public class AdminGroupsController(AppDbContext db) : ControllerBase
                 var tIds = affectedLoads.Select(a => a.TeacherId!.Value).Distinct().ToList();
                 var cIds = affectedLoads.Select(a => a.CourseId).Distinct().ToList();
 
-                var excludeLoadIds = await db.LessonTypes.Where(lt => !lt.CountInLoad).Select(lt => lt.Id).ToListAsync();
+                var excludeLoadIds = await db.LessonTypes
+                    .Where(lt =>
+                        !lt.CountInLoad
+                        || string.Equals(lt.Code, "CANCELED", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(lt.Code, "RESCHEDULED", StringComparison.OrdinalIgnoreCase))
+                    .Select(lt => lt.Id)
+                    .ToListAsync();
 
                 var counts = await db.ScheduleItems
                     .Include(si => si.Group)
@@ -98,7 +104,10 @@ public class AdminGroupsController(AppDbContext db) : ControllerBase
                 .ToListAsync();
 
             var excludePlanIds = lessonTypes
-                .Where(lt => !lt.CountInPlan && !string.Equals(lt.Code, "CANCELED", System.StringComparison.OrdinalIgnoreCase))
+                .Where(lt =>
+                    !lt.CountInPlan
+                    || string.Equals(lt.Code, "CANCELED", System.StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(lt.Code, "RESCHEDULED", System.StringComparison.OrdinalIgnoreCase))
                 .Select(lt => lt.Id)
                 .ToHashSet();
 

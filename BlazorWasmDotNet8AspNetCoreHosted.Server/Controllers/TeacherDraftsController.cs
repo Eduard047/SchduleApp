@@ -91,6 +91,39 @@ public sealed class TeacherDraftsController : ControllerBase
 
         var items = await q.OrderBy(x => x.Date).ThenBy(x => x.StartTime).ToListAsync();
 
+        var topicIds = items
+            .Where(i => i.ModuleTopicId is int)
+            .Select(i => i.ModuleTopicId!.Value)
+            .Distinct()
+            .ToList();
+        var topicCodeLookup = topicIds.Count == 0
+            ? new Dictionary<int, string>()
+            : await _db.ModuleTopics
+                .Where(mt => topicIds.Contains(mt.Id))
+                .Select(mt => new { mt.Id, mt.TopicCode })
+                .ToDictionaryAsync(mt => mt.Id, mt => (mt.TopicCode ?? string.Empty).Trim());
+
+        var rescheduleSourceIds = items
+            .Select(i => ParseRescheduleBatchKey(i.BatchKey))
+            .Where(info => info.isRescheduled && info.sourceItemId is int)
+            .Select(info => info.sourceItemId!.Value)
+            .Distinct()
+            .ToList();
+        var rescheduleTopicLookup = rescheduleSourceIds.Count == 0
+            ? new Dictionary<int, (int? topicId, string? topicCode)>()
+            : await _db.ScheduleItems
+                .AsNoTracking()
+                .Where(si => rescheduleSourceIds.Contains(si.Id))
+                .Select(si => new
+                {
+                    si.Id,
+                    si.ModuleTopicId,
+                    TopicCode = si.ModuleTopic != null ? si.ModuleTopic.TopicCode : null
+                })
+                .ToDictionaryAsync(
+                    x => x.Id,
+                    x => (topicId: x.ModuleTopicId, topicCode: string.IsNullOrWhiteSpace(x.TopicCode) ? null : x.TopicCode!.Trim()));
+
         static string ResolveTeacherGroupKey(TeacherDraftItem item)
         {
             if (!string.IsNullOrWhiteSpace(item.BatchKey))
@@ -127,7 +160,22 @@ public sealed class TeacherDraftsController : ControllerBase
             }
 
         var teacherLabel = teacherNames.Count > 0 ? string.Join(", ", teacherNames) : (i.Teacher?.FullName ?? "");
+
+        var resolvedTopicId = i.ModuleTopicId;
+        if (resolvedTopicId is null && rescheduleInfo.sourceItemId is int sid && rescheduleTopicLookup.TryGetValue(sid, out var topicInfoFromSource))
+        {
+            resolvedTopicId = topicInfoFromSource.topicId;
+        }
+
         var topicCode = BuildModuleTopicCode(i.ModuleTopic);
+        if (topicCode is null && resolvedTopicId is int mtId && topicCodeLookup.TryGetValue(mtId, out var resolvedCode) && !string.IsNullOrWhiteSpace(resolvedCode))
+        {
+            topicCode = resolvedCode;
+        }
+        if (topicCode is null && rescheduleInfo.sourceItemId is int sourceId && rescheduleTopicLookup.TryGetValue(sourceId, out var reschedTopic) && !string.IsNullOrWhiteSpace(reschedTopic.topicCode))
+        {
+            topicCode = reschedTopic.topicCode;
+        }
 
             var requiresRoom = i.LessonType.RequiresRoom;
 
@@ -142,7 +190,7 @@ public sealed class TeacherDraftsController : ControllerBase
             Module: i.Module.Title,
             ModuleId: i.ModuleId,
             TopicCode: topicCode,
-        ModuleTopicId: i.ModuleTopicId,
+            ModuleTopicId: resolvedTopicId,
             Teacher: teacherLabel,
             TeacherId: i.TeacherId,
             Room: requiresRoom && i.Room is not null ? i.Room.Name : "",
@@ -381,18 +429,25 @@ public sealed class TeacherDraftsController : ControllerBase
         return NoContent();
     }
 
-    private static (bool isRescheduled, int? originalLessonTypeId) ParseRescheduleBatchKey(string? batchKey)
+    internal static (bool isRescheduled, int? sourceItemId, int? originalLessonTypeId) ParseRescheduleBatchKey(string? batchKey)
     {
-        if (string.IsNullOrWhiteSpace(batchKey)) return (false, null);
-        if (!batchKey.StartsWith("rescheduled", StringComparison.OrdinalIgnoreCase)) return (false, null);
+        if (string.IsNullOrWhiteSpace(batchKey)) return (false, null, null);
+        if (!batchKey.StartsWith("rescheduled", StringComparison.OrdinalIgnoreCase)) return (false, null, null);
 
         var parts = batchKey.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (parts.Length >= 3 && int.TryParse(parts[2], out var ltId))
+        int? sourceId = null;
+        if (parts.Length >= 2 && int.TryParse(parts[1], out var parsedSource))
         {
-            return (true, ltId);
+            sourceId = parsedSource;
         }
 
-        return (true, null);
+        int? ltId = null;
+        if (parts.Length >= 3 && int.TryParse(parts[2], out var parsedLt))
+        {
+            ltId = parsedLt;
+        }
+
+        return (true, sourceId, ltId);
     }
     /// <summary>
     /// Нормалізує код теми модуля перед збереженням.
@@ -1861,12 +1916,18 @@ public sealed class TeacherDraftsController : ControllerBase
             .ToListAsync();
 
         var excludePlanIds = lessonTypes
-            .Where(lt => !lt.CountInPlan && !string.Equals(lt.Code, "CANCELED", System.StringComparison.OrdinalIgnoreCase))
+            .Where(lt =>
+                !lt.CountInPlan
+                || string.Equals(lt.Code, "CANCELED", System.StringComparison.OrdinalIgnoreCase)
+                || string.Equals(lt.Code, "RESCHEDULED", System.StringComparison.OrdinalIgnoreCase))
             .Select(lt => lt.Id)
             .ToHashSet();
 
         var excludeLoadIds = lessonTypes
-            .Where(lt => !lt.CountInLoad)
+            .Where(lt =>
+                !lt.CountInLoad
+                || string.Equals(lt.Code, "CANCELED", System.StringComparison.OrdinalIgnoreCase)
+                || string.Equals(lt.Code, "RESCHEDULED", System.StringComparison.OrdinalIgnoreCase))
             .Select(lt => lt.Id)
             .ToHashSet();
 

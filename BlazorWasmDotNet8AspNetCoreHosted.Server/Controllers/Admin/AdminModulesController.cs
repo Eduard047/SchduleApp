@@ -304,15 +304,82 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
 
         if (topicIds.Count > 0)
         {
-            plannedDict = await db.TeacherDraftItems
-                .Where(di => di.ModuleTopicId != null && topicIds.Contains(di.ModuleTopicId!.Value) && di.Status == DraftStatus.Draft)
-                .Select(di => new { TopicId = di.ModuleTopicId!.Value, GroupName = di.Group.Name })
+            var excludeCompletedCodes = new[] { "CANCELED", "RESCHEDULED" };
+            var excludePlannedCodes = new[] { "CANCELED" };
+
+            var draftRows = await db.TeacherDraftItems
+                .Include(di => di.LessonType)
+                .Include(di => di.Group)
+                .Where(di => di.Status == DraftStatus.Draft
+                             && ((di.ModuleTopicId != null && topicIds.Contains(di.ModuleTopicId.Value))
+                                 || (di.BatchKey != null && EF.Functions.Like(di.BatchKey, "rescheduled%"))))
+                .Select(di => new
+                {
+                    di.Id,
+                    di.ModuleTopicId,
+                    di.BatchKey,
+                    LessonTypeCode = di.LessonType != null ? (di.LessonType.Code ?? "") : "",
+                    GroupName = di.Group != null ? di.Group.Name : null
+                })
+                .ToListAsync();
+
+            var reschedSourceIds = draftRows
+                .Select(r => TeacherDraftsController.ParseRescheduleBatchKey(r.BatchKey))
+                .Where(info => info.isRescheduled && info.sourceItemId is int)
+                .Select(info => info.sourceItemId!.Value)
                 .Distinct()
-                .GroupBy(x => x.TopicId)
-                .ToDictionaryAsync(g => g.Key, g => g.Select(x => x.GroupName).OrderBy(x => x).ToList());
+                .ToList();
+
+            var reschedSourceTopics = reschedSourceIds.Count == 0
+                ? new Dictionary<int, int?>()
+                : await db.ScheduleItems
+                    .Where(si => reschedSourceIds.Contains(si.Id))
+                    .Select(si => new { si.Id, si.ModuleTopicId })
+                    .ToDictionaryAsync(x => x.Id, x => x.ModuleTopicId);
+
+            foreach (var row in draftRows)
+            {
+                if (string.IsNullOrWhiteSpace(row.GroupName)) continue;
+
+                var codeUpper = row.LessonTypeCode.ToUpperInvariant();
+                if (excludePlannedCodes.Contains(codeUpper)) continue;
+
+                int? resolvedTopicId = row.ModuleTopicId;
+                if (resolvedTopicId is null)
+                {
+                    var info = TeacherDraftsController.ParseRescheduleBatchKey(row.BatchKey);
+                    if (info.isRescheduled && info.sourceItemId is int sid && reschedSourceTopics.TryGetValue(sid, out var topicIdFromSource))
+                    {
+                        resolvedTopicId = topicIdFromSource;
+                    }
+                }
+
+                if (resolvedTopicId is null) continue;
+                if (!topicIds.Contains(resolvedTopicId.Value)) continue;
+
+                if (!plannedDict.TryGetValue(resolvedTopicId.Value, out var groups))
+                {
+                    groups = new List<string>();
+                    plannedDict[resolvedTopicId.Value] = groups;
+                }
+
+                if (!groups.Contains(row.GroupName))
+                {
+                    groups.Add(row.GroupName);
+                }
+            }
+
+            foreach (var kvp in plannedDict.ToList())
+            {
+                plannedDict[kvp.Key] = kvp.Value.OrderBy(x => x).ToList();
+            }
 
             completedDict = await db.ScheduleItems
                 .Where(si => si.ModuleTopicId != null && topicIds.Contains(si.ModuleTopicId!.Value))
+                .Include(si => si.LessonType)
+                .Where(si =>
+                    si.LessonType != null
+                    && !excludeCompletedCodes.Contains((si.LessonType.Code ?? "").ToUpper()))
                 .Select(si => new { TopicId = si.ModuleTopicId!.Value, GroupName = si.Group.Name })
                 .Distinct()
                 .GroupBy(x => x.TopicId)

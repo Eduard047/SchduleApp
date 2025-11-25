@@ -81,7 +81,12 @@ public class ScheduleController : ControllerBase
         var lt = await _db.LessonTypes.FindAsync(r.LessonTypeId);
         if (lt is null) return BadRequest(new { message = "LessonType not found" });
 
+        var ltCode = lt.Code ?? string.Empty;
         var normalizedRoomId = lt.RequiresRoom ? r.RoomId : null;
+        if ((string.Equals(ltCode, "CANCELED", StringComparison.OrdinalIgnoreCase) || string.Equals(ltCode, "RESCHEDULED", StringComparison.OrdinalIgnoreCase)) && r.RoomId is int keepRoomId)
+        {
+            normalizedRoomId = keepRoomId;
+        }
 
         var start = TimeOnly.Parse(r.TimeStart);
         var end = TimeOnly.Parse(r.TimeEnd);
@@ -93,6 +98,9 @@ public class ScheduleController : ControllerBase
             if (item is null) return NotFound(new { message = $"ScheduleItem {id} not found" });
 
             var previousLessonTypeId = item.LessonTypeId;
+            var previousRoomId = item.RoomId;
+            var previousLessonType = await _db.LessonTypes.AsNoTracking().FirstOrDefaultAsync(t => t.Id == previousLessonTypeId);
+            var previousRequiresRoom = previousLessonType?.RequiresRoom ?? true;
             var oldGroupId = item.GroupId;
             var oldModuleId = item.ModuleId;
             var oldTeacherId = item.TeacherId;
@@ -112,7 +120,7 @@ public class ScheduleController : ControllerBase
             var isRescheduled = string.Equals(lt.Code, "RESCHEDULED", StringComparison.OrdinalIgnoreCase);
             if (isRescheduled && previousLessonTypeId != r.LessonTypeId)
             {
-                await TryCreateRescheduledCopyAsync(item, previousLessonTypeId, start, end);
+                await TryCreateRescheduledCopyAsync(item, previousLessonTypeId, start, end, previousRoomId, previousRequiresRoom);
             }
 
             var newCourseId = await _db.Groups.Where(g => g.Id == r.GroupId).Select(g => g.CourseId).FirstAsync();
@@ -177,13 +185,19 @@ public class ScheduleController : ControllerBase
     }
 
     
-    private async Task TryCreateRescheduledCopyAsync(ScheduleItem source, int previousLessonTypeId, TimeOnly originalStart, TimeOnly originalEnd)
+    private async Task TryCreateRescheduledCopyAsync(
+        ScheduleItem source,
+        int previousLessonTypeId,
+        TimeOnly originalStart,
+        TimeOnly originalEnd,
+        int? previousRoomId,
+        bool previousRequiresRoom)
     {
         var prevType = await _db.LessonTypes.FindAsync(previousLessonTypeId);
         if (prevType is null) return;
 
-        var requiresRoom = prevType.RequiresRoom;
-        var normalizedRoomId = requiresRoom ? source.RoomId : null;
+        var requiresRoom = previousRequiresRoom || prevType.RequiresRoom;
+        var normalizedRoomId = requiresRoom ? (previousRoomId ?? source.RoomId) : null;
 
         var groupInfo = await _db.Groups
             .Where(g => g.Id == source.GroupId)
@@ -400,13 +414,19 @@ public class ScheduleController : ControllerBase
             .ToListAsync();
 
         var excludePlanIds = lessonTypes
-            .Where(lt => !lt.CountInPlan && !string.Equals(lt.Code, "CANCELED", System.StringComparison.OrdinalIgnoreCase))
+            .Where(lt =>
+                !lt.CountInPlan
+                || string.Equals(lt.Code, "CANCELED", System.StringComparison.OrdinalIgnoreCase)
+                || string.Equals(lt.Code, "RESCHEDULED", System.StringComparison.OrdinalIgnoreCase))
             .Select(lt => lt.Id)
             .ToHashSet();
 
         
         var excludeLoadIds = lessonTypes
-            .Where(lt => !lt.CountInLoad)
+            .Where(lt =>
+                !lt.CountInLoad
+                || string.Equals(lt.Code, "CANCELED", System.StringComparison.OrdinalIgnoreCase)
+                || string.Equals(lt.Code, "RESCHEDULED", System.StringComparison.OrdinalIgnoreCase))
             .Select(lt => lt.Id)
             .ToHashSet();
 
