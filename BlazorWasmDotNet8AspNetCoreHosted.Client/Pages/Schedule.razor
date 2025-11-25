@@ -108,10 +108,10 @@
     
     static string CssByCode(string code) => code switch
     {
-        "LECTURE" => "lec",
-        "SEMINAR" => "sem",
-        "LAB" => "lab",
-        "PRACTICE" => "prc",   
+        "LECTURE" => "c1",
+        "SEMINAR" => "c2",
+        "LAB" => "c3",
+        "PRACTICE" => "c4",   
         "CANCELED" => "can",
         "RESCHEDULED" => "res", 
         "BREAK" => "brk",
@@ -264,16 +264,6 @@
 else
 {
     <div class="layout">
-        
-        <aside class="legend">
-            <div class="legend-title">Позначення</div>
-            <div class="legend-row"><span class="dot dot-lec"></span>Лекція</div>
-            <div class="legend-row"><span class="dot dot-sem"></span>Семінар</div>
-            <div class="legend-row"><span class="dot dot-lab"></span>Лабораторне</div>
-            <div class="legend-row"><span class="dot dot-prc"></span>Практичне</div>
-            <div class="legend-row"><span class="dot dot-can"></span>Скасоване заняття</div>
-        </aside>
-
         
         <div class="grid-wrap">
             <table class="schedule">
@@ -482,55 +472,6 @@ else
         align-items: flex-start;
     }
 
-    .legend {
-        min-width: 240px;
-        background: #fff;
-        border: 1px solid #e5e7eb;
-        border-radius: 16px;
-        padding: 14px;
-        position: sticky;
-        top: 8px;
-    }
-
-    .legend-title {
-        font-weight: 700;
-        margin-bottom: .5rem;
-    }
-
-    .legend-row {
-        display: flex;
-        align-items: center;
-        gap: .5rem;
-        margin: .35rem 0;
-    }
-
-    .dot {
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        display: inline-block;
-    }
-
-    .dot-lec {
-        background: #5aa3ff;
-    }
-
-    .dot-sem {
-        background: #37c06a;
-    }
-
-    .dot-lab {
-        background: #ffb400;
-    }
-
-    .dot-prc {
-        background: #a78bfa;
-    }
-    
-    .dot-can {
-        background: #ff5a5a;
-    }
-
     .grid-wrap {
         width: 100%;
         overflow: auto;
@@ -694,47 +635,40 @@ else
     }
 
     
-    .lec {
-        background: #e9f3ff;
-    }
-
-    .sem {
-        background: #eafaf0;
-    }
-
-    .lab {
-        background: #fff7df;
-    }
-    
-    .prc {
-        background: #efe5ff;
-    }
-    .c7 {
-        background: #e7f4ff;
-    }
-    .c8 {
-        background: #e6fff5;
-    }
-    .c9 {
-        background: #fffbe6;
-    }
-    .c10 {
-        background: #f3e8ff;
-    }
+    .c1  { background: #c9e6ff; }
+    .c2  { background: #b6f4d2; }
+    .c3  { background: #ffe2a9; }
+    .c4  { background: #e6d0ff; }
+    .c7  { background: #cde3ff; }
+    .c8  { background: #c3f7e3; }
+    .c9  { background: #ffe9a6; }
+    .c10 { background: #d8c3ff; }
+    .c11 { background: #ffb8a8; }
+    .c12 { background: #f7c6ff; }
+    .c13 { background: #a9e7ff; }
+    .c14 { background: #d6f5a3; }
+    .c15 { background: #ffd2b3; }
+    .c16 { background: #ced7e5; }
+    .c11 { background: #ffe5f5; }
+    .c12 { background: #e8e5ff; }
+    .c13 { background: #e0f7ff; }
+    .c14 { background: #e7ffe5; }
+    .c15 { background: #fbeae3; }
+    .c16 { background: #e6eef7; }
     
     .brk {
-        background: #f1f5f9;
+        background: #e6ecf4;
         text-align: center;
     }
 
     .can {
-        background: #ffe9e9;
+        background: #ffd9e0;
         text-decoration: line-through;
     }
 
     
     .res {
-        background: #e0f2fe;
+        background: #cdebff;
         border: 1px dashed #38bdf8;
     }
 

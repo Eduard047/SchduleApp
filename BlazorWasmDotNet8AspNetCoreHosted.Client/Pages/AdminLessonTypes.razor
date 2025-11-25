@@ -50,20 +50,25 @@
                                 @foreach (var c in palette)
                                 {
                                     var isMine = form.Id.HasValue && c.UsedByTypeId.HasValue && c.UsedByTypeId.Value == form.Id.Value;
-                                    var disabled = c.IsUsed && !isMine;
+                                    var usedByOther = c.IsUsed && !isMine;
+                                    var itemClass = usedByOther ? "palette-item palette-item--used" : "palette-item";
 
-                                    <label class="palette-item" title="@($"{c.Name} ({c.Key})")">
-                                        <InputRadio TValue="string" Value="@c.Key" Disabled="disabled" />
+                                    <label class="@itemClass" title="@($"{c.Name} ({c.Key})")">
+                                        <InputRadio TValue="string" Value="@c.Key" />
                                         <span class="swatch @c.Key"></span>
                                         <span class="caption">
                                             <code>@c.Key</code>
                                             <small class="text-muted d-block">@c.Name</small>
+                                            @if (usedByOther)
+                                            {
+                                                <small class="badge bg-light text-muted">зайнято</small>
+                                            }
                                         </span>
                                     </label>
                                 }
                             </div>
                         </InputRadioGroup>
-                        <div class="small text-muted mt-1">Оберіть один вільний колір. Зайняті варіанти недоступні.</div>
+                        <div class="small text-muted mt-1">Можна обрати будь-який колір. Зайняті позначені, але залишаються доступними.</div>
                     }
                 </div>
 
@@ -387,46 +392,23 @@
     }
 
     
-    .lec {
-        background: #e9f3ff;
-    }
-
-    .sem {
-        background: #eafaf0;
-    }
-
-    .lab {
-        background: #fff7df;
-    }
-
-    .prc {
-        background: #efe5ff;
-    }
-
-    .brk {
-        background: #f1f5f9;
-    }
-
-    .can {
-        background: #ffe9e9;
-        text-decoration: line-through;
-    }
-
-    .c7 {
-        background: #E7F4FF;
-    }
-
-    .c8 {
-        background: #E6FFF5;
-    }
-
-    .c9 {
-        background: #FFFBE6;
-    }
-
-    .c10 {
-        background: #F3E8FF;
-    }
+    .c1  { background: #c9e6ff; }
+    .c2  { background: #b6f4d2; }
+    .c3  { background: #ffe2a9; }
+    .c4  { background: #e6d0ff; }
+    .res { background: #b0ebff; border: 1px dashed #38bdf8; }
+    .brk { background: #e4e9f2; }
+    .can { background: #ffc7d4; text-decoration: line-through; }
+    .c7  { background: #cde3ff; }
+    .c8  { background: #c3f7e3; }
+    .c9  { background: #ffe9a6; }
+    .c10 { background: #d8c3ff; }
+    .c11 { background: #ffb8a8; }
+    .c12 { background: #f7c6ff; }
+    .c13 { background: #a9e7ff; }
+    .c14 { background: #d6f5a3; }
+    .c15 { background: #ffd2b3; }
+    .c16 { background: #ced7e5; }
 
     
     .palette-grid {
@@ -441,16 +423,20 @@
         }
     }
 
-    .palette-item {
-        display: flex;
-        align-items: center;
-        gap: .5rem;
-        border: 1px solid #e5e7eb;
-        border-radius: .5rem;
-        padding: .4rem .5rem;
-        background: #fff;
-        user-select: none;
-    }
+        .palette-item {
+            display: flex;
+            align-items: center;
+            gap: .5rem;
+            border: 1px solid #e5e7eb;
+            border-radius: .5rem;
+            padding: .4rem .5rem;
+            background: #fff;
+            user-select: none;
+        }
+
+        .palette-item--used {
+            border-style: dashed;
+        }
 
         .palette-item input[type="radio"] {
             margin-right: .25rem;

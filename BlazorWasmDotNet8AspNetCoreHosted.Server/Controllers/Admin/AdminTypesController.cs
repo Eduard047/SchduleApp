@@ -19,16 +19,23 @@ public class AdminTypesController(AppDbContext db) : ControllerBase
     private static readonly IReadOnlyDictionary<string, PaletteItem> Palette =
         new Dictionary<string, PaletteItem>
         {
-            ["lec"] = new("Лекція (блакитний)", "#E9F3FF"),
-            ["sem"] = new("Семінар (зелений)", "#EAFAF0"),
-            ["lab"] = new("Лабораторне (жовтий)", "#FFF7DF"),
-            ["prc"] = new("Практика (фіолет.)", "#EFE5FF"),
-            ["brk"] = new("Перерва (сірий)", "#F1F5F9"),
-            ["can"] = new("Скасовано (рожев.)", "#FFE9E9"),
-            ["c7"] = new("Небесний", "#E7F4FF"),
-            ["c8"] = new("Мʼята", "#E6FFF5"),
-            ["c9"] = new("Лимон", "#FFFBE6"),
-            ["c10"] = new("Лаванда", "#F3E8FF"),
+            ["c1"] = new("Небесний", "#C9E6FF"),
+            ["c2"] = new("Смарагдовий", "#B6F4D2"),
+            ["c3"] = new("Пісочний", "#FFE2A9"),
+            ["c4"] = new("Ліловий", "#E6D0FF"),
+            ["brk"] = new("Стальний (перерва)", "#E4E9F2"),
+            ["can"] = new("Рожевий (скасовано)", "#FFC7D4"),
+            ["res"] = new("Бірюзовий (перенесено)", "#B0EBFF"),
+            ["c7"] = new("Лазурний", "#CDE3FF"),
+            ["c8"] = new("Мʼята", "#C3F7E3"),
+            ["c9"] = new("Банан", "#FFE9A6"),
+            ["c10"] = new("Лаванда", "#D8C3FF"),
+            ["c11"] = new("Корал", "#FFB8A8"),
+            ["c12"] = new("Півонія", "#F7C6FF"),
+            ["c13"] = new("Льодяний", "#A9E7FF"),
+            ["c14"] = new("Лайм", "#D6F5A3"),
+            ["c15"] = new("Персик", "#FFD2B3"),
+            ["c16"] = new("Стальний-2", "#CED7E5"),
         };
 
     

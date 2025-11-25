@@ -418,11 +418,11 @@ public sealed class TeacherDraftsController : ControllerBase
     /// <summary>
     /// Видаляє чернетку, якщо запис існує та не заблокований.
     /// </summary>
-    public async Task<IActionResult> Delete(int id)
+    public async Task<IActionResult> Delete(int id, [FromQuery] bool confirm = false, [FromQuery] bool unrestricted = false)
     {
         var item = await _db.TeacherDraftItems.FirstOrDefaultAsync(x => x.Id == id);
         if (item is null) return NotFound(new { message = $"TeacherDraftItem {id} not found" });
-        if (item.IsLocked) return Conflict(new { message = "Чернетка заблокована. Розблокуйте її, щоб видалити." });
+        if (item.IsLocked && !unrestricted) return Conflict(new { message = "Чернетка заблокована. Увімкніть режим без обмежень, щоб видалити." });
 
         _db.TeacherDraftItems.Remove(item);
         await _db.SaveChangesAsync();
@@ -1215,7 +1215,7 @@ public sealed class TeacherDraftsController : ControllerBase
                     return $"Для групи {grp.Name} більше не лишилось модулів із невикористаними годинами.";
                 }
 
-                return null;
+                return "Причину не вдалося визначити автоматично. Перевірте доступність викладачів, аудиторій, обмеження за типом заняття та дозволені повторення.";
             }
 
             void WarnGap(DateOnly date, TimeSlot gap)
@@ -1224,6 +1224,48 @@ public sealed class TeacherDraftsController : ControllerBase
                 var key = (grp.Id, date, gap.Start, gap.End);
                 if (gapWarnings.Add(key))
                 {
+                    if (!slotFailureReasons.ContainsKey(key))
+                    {
+                        var modulesWithHours = remainingByGroupModule
+                            .Where(kv => kv.Key.GroupId == grp.Id && kv.Value > 0)
+                            .Select(kv => kv.Key.ModuleId)
+                            .Distinct()
+                            .ToList();
+
+                        if (modulesWithHours.Count == 0)
+                        {
+                            RecordSlotFailureReason(date, gap, $"Для групи {grp.Name} не лишилось модулів із невикористаними годинами.");
+                        }
+                        else
+                        {
+                            var noTeachers = modulesWithHours
+                                .Where(mid => !teachersForModule.Any(t => t.ModuleId == mid))
+                                .Select(mid => $"#{mid}")
+                                .ToList();
+
+                            var noRooms = modulesWithHours
+                                .Where(mid => CandidateRoomsFor(mid).Count == 0)
+                                .Select(mid => $"#{mid}")
+                                .ToList();
+
+                            if (noTeachers.Count > 0)
+                            {
+                                RecordSlotFailureReason(date, gap, $"Немає викладачів для модулів: {string.Join(", ", noTeachers)}.");
+                            }
+                            else if (noRooms.Count > 0)
+                            {
+                                RecordSlotFailureReason(date, gap, $"Немає доступних аудиторій для модулів: {string.Join(", ", noRooms)}.");
+                            }
+                            else if (CountFor(grp.Id, date) >= slots.Count)
+                            {
+                                RecordSlotFailureReason(date, gap, $"Досягнуто максимум пар на день для групи {grp.Name} ({slots.Count}).");
+                            }
+                            else
+                            {
+                                RecordSlotFailureReason(date, gap, $"Не вдалося підібрати комбінацію модуль/викладач/аудиторія для слоту {label}: усі варіанти зайняті або заборонені правилами.");
+                            }
+                        }
+                    }
                     var reason = ComposeGapReason(date, gap);
                     var reasonSuffix = string.IsNullOrWhiteSpace(reason) ? string.Empty : $" Причина: {reason}";
                     warnings.Add($"Автогенерація не заповнила слот {label} для групи {grp.Name} на {date:yyyy-MM-dd}.{reasonSuffix}");
@@ -1465,7 +1507,11 @@ public sealed class TeacherDraftsController : ControllerBase
 
                     bool slotBreak = busy.Any(b => b.GroupId == grp.Id && b.Date == date
                                                    && b.LessonTypeId == typeBreakId && b.StartTime == s && b.EndTime == e);
-                    if (slotBreak) continue;
+                    if (slotBreak)
+                    {
+                        RecordSlotFailureReason(date, sl, $"Слот {slotLabel} зайнятий перервою/обідом.");
+                        continue;
+                    }
 
                     foreach (var tidCandidate in tids)
                     {
@@ -1489,6 +1535,22 @@ public sealed class TeacherDraftsController : ControllerBase
                         var topicSelection = pickResult.Topic;
                         if (!TypeAllowed(ltypeId))
                         {
+                            if (!typeById.TryGetValue(ltypeId, out var ltInfo))
+                            {
+                                slotIssues.Add($"Тип заняття #{ltypeId} не знайдено, тому слот {slotLabel} пропущено.");
+                            }
+                            else if (!ltInfo.IsActive)
+                            {
+                                slotIssues.Add($"Тип заняття \"{ltInfo.Name}\" неактивний, тому слот {slotLabel} пропущено.");
+                            }
+                            else if (!ltInfo.CountInPlan)
+                            {
+                                slotIssues.Add($"Тип заняття \"{ltInfo.Name}\" не враховується у плані (CountInPlan=false), тому слот {slotLabel} пропущено.");
+                            }
+                            else if (excludedTypeIds.Contains(ltypeId))
+                            {
+                                slotIssues.Add($"Тип заняття \"{ltInfo.Name}\" виключено з автогенерації, тому слот {slotLabel} пропущено.");
+                            }
                             continue;
                         }
 
@@ -1634,6 +1696,14 @@ public sealed class TeacherDraftsController : ControllerBase
                         foreach (var reason in slotIssues)
                         {
                             RecordSlotFailureReason(date, sl, reason);
+                        }
+                    }
+                    else
+                    {
+                        var key = (grp.Id, date, sl.Start, sl.End);
+                        if (!slotFailureReasons.ContainsKey(key))
+                        {
+                            RecordSlotFailureReason(date, sl, $"Не знайдено вільної комбінації викладачів/аудиторій для модуля <{ModuleLabel()}> у слоті {slotLabel} (обмеження повторів/тем/робочих годин).");
                         }
                     }
                 }

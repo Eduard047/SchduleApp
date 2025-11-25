@@ -94,13 +94,16 @@
         </table>
 
         <div class="form-text">
-            Порада: Тримай тривалості однаковими (наприклад, 90 хвилин), тоді обід краще задавати окремим слотом (наприклад 12:00–13:00),
+            Порада: Тримайте тривалості однаковими (наприклад, 90 хвилин), тоді обід краще задавати окремим слотом (наприклад 12:00–13:00),
             щоб він займав місце пари автоматично.
         </div>
     </div>
 </div>
 
 @code {
+    private static readonly TimeOnly DefaultStart = new(8, 30);
+    private static readonly TimeSpan DefaultDuration = TimeSpan.FromMinutes(90);
+    private static readonly TimeSpan DefaultBreak = TimeSpan.FromMinutes(15);
     enum Scope { Global, Course }
 
     private Scope _scope = Scope.Global;
@@ -130,10 +133,37 @@
         _rows = await Api.GetEffectiveAsync(_scope == Scope.Global ? null : _courseId);
     }
 
+    private (string start, string end) CalculateNextSlot()
+    {
+        var valid = _rows
+            .Select(r => new
+            {
+                Row = r,
+                Start = TryTime(r.Start, out var s) ? s : (TimeOnly?)null,
+                End = TryTime(r.End, out var e) ? e : (TimeOnly?)null
+            })
+            .Where(x => x.Start is not null && x.End is not null && x.Start < x.End)
+            .OrderBy(x => x.Row.SortOrder)
+            .ThenBy(x => x.Start);
+
+        var nextStart = valid.LastOrDefault()?.End?.Add(DefaultBreak) ?? DefaultStart;
+        var nextEnd = nextStart.Add(DefaultDuration);
+        return (nextStart.ToString("HH:mm"), nextEnd.ToString("HH:mm"));
+    }
+
     private void AddRow()
     {
         var maxOrder = _rows.Count == 0 ? 1 : _rows.Max(x => x.SortOrder) + 1;
-        _rows.Add(new TimeSlotDto { Id = 0, CourseId = _scope == Scope.Global ? null : _courseId, SortOrder = maxOrder, Start = "08:30", End = "10:00", IsActive = true });
+        var (start, end) = CalculateNextSlot();
+        _rows.Add(new TimeSlotDto
+        {
+            Id = 0,
+            CourseId = _scope == Scope.Global ? null : _courseId,
+            SortOrder = maxOrder,
+            Start = start,
+            End = end,
+            IsActive = true
+        });
     }
 
     private void RemoveRow(TimeSlotDto r) => _rows.Remove(r);

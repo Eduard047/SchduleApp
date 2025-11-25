@@ -146,7 +146,10 @@ else
             <div class="alert alert-success mt-3">
                 <div class="d-flex flex-column gap-2">
                     <div>@ok</div>
-                    @if (okWarnings.Count > 0)
+                    @{
+                        var warningsTotal = okWarnings.Count + _latestGapDetails.Count;
+                    }
+                    @if (warningsTotal > 0)
                     {
                         <div>
                             <button type="button"
@@ -154,7 +157,7 @@ else
                                     @onclick="ToggleOkWarnings">
                                 @(okWarningsExpanded
                                     ? "Сховати попередження"
-                                    : $"Попередження ({okWarnings.Count})")
+                                    : $"Попередження ({warningsTotal})")
                             </button>
                         </div>
                         @if (okWarningsExpanded)
@@ -174,28 +177,6 @@ else
                         }
                             </ul>
                         }
-                    }
-                    @if (_latestGapDetails.Count > 0)
-                    {
-                        <div class="mt-2">
-                            <div class="fw-semibold small">Деталі пропущених слотів:</div>
-                            <ul class="mb-0 small">
-                                @foreach (var gap in _latestGapDetails)
-                                {
-                                    <li class="mb-1 gap-detail-item">
-                                        <div>
-                                            <span class="fw-semibold">@gap.GroupName</span>
-                                            – @gap.Date.ToString("dd.MM.yyyy") з @gap.SlotLabel.
-                                        </div>
-                                        @if (!string.IsNullOrWhiteSpace(gap.Reason))
-                                        {
-                                            <div class="gap-reason"><strong>Причина:</strong> @gap.Reason</div>
-                                            <div class="gap-consequence">Наслідок: слот лишається пустим, доведеться заповнити вручну або відкоригувати розклад.</div>
-                                        }
-                                    </li>
-                                }
-                            </ul>
-                        </div>
                     }
                 </div>
             </div>
