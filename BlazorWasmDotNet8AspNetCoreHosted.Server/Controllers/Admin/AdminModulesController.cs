@@ -301,6 +301,8 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
         var topicIds = topics.Select(t => t.Id).ToList();
         var plannedDict = new Dictionary<int, List<string>>();
         var completedDict = new Dictionary<int, List<string>>();
+        var plannedHoursDict = new Dictionary<int, Dictionary<string, TopicGroupHoursDto>>();
+        var completedHoursDict = new Dictionary<int, Dictionary<string, TopicGroupHoursDto>>();
 
         if (topicIds.Count > 0)
         {
@@ -318,6 +320,7 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
                     di.Id,
                     di.ModuleTopicId,
                     di.BatchKey,
+                    di.IsSelfStudy,
                     LessonTypeCode = di.LessonType != null ? (di.LessonType.Code ?? "") : "",
                     GroupName = di.Group != null ? di.Group.Name : null
                 })
@@ -367,6 +370,20 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
                 {
                     groups.Add(row.GroupName);
                 }
+
+                if (!plannedHoursDict.TryGetValue(resolvedTopicId.Value, out var hoursByGroup))
+                {
+                    hoursByGroup = new Dictionary<string, TopicGroupHoursDto>(StringComparer.CurrentCultureIgnoreCase);
+                    plannedHoursDict[resolvedTopicId.Value] = hoursByGroup;
+                }
+
+                if (!hoursByGroup.TryGetValue(row.GroupName, out var stat))
+                {
+                    stat = new TopicGroupHoursDto(row.GroupName, 0, 0);
+                }
+                var aud = stat.AuditoriumHours + (row.IsSelfStudy ? 0 : 1);
+                var self = stat.SelfStudyHours + (row.IsSelfStudy ? 1 : 0);
+                hoursByGroup[row.GroupName] = new TopicGroupHoursDto(row.GroupName, aud, self);
             }
 
             foreach (var kvp in plannedDict.ToList())
@@ -374,22 +391,49 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
                 plannedDict[kvp.Key] = kvp.Value.OrderBy(x => x).ToList();
             }
 
-            completedDict = await db.ScheduleItems
+            var completedRows = await db.ScheduleItems
                 .Where(si => si.ModuleTopicId != null && topicIds.Contains(si.ModuleTopicId!.Value))
                 .Include(si => si.LessonType)
                 .Where(si =>
                     si.LessonType != null
                     && !excludeCompletedCodes.Contains((si.LessonType.Code ?? "").ToUpper()))
-                .Select(si => new { TopicId = si.ModuleTopicId!.Value, GroupName = si.Group.Name })
-                .Distinct()
+                .Select(si => new { TopicId = si.ModuleTopicId!.Value, GroupName = si.Group.Name, si.IsSelfStudy })
+                .ToListAsync();
+
+            completedDict = completedRows
+                .DistinctBy(x => new { x.TopicId, x.GroupName })
                 .GroupBy(x => x.TopicId)
-                .ToDictionaryAsync(g => g.Key, g => g.Select(x => x.GroupName).OrderBy(x => x).ToList());
+                .ToDictionary(g => g.Key, g => g.Select(x => x.GroupName).OrderBy(x => x).ToList());
+
+            foreach (var row in completedRows)
+            {
+                if (string.IsNullOrWhiteSpace(row.GroupName)) continue;
+                if (!completedHoursDict.TryGetValue(row.TopicId, out var hoursByGroup))
+                {
+                    hoursByGroup = new Dictionary<string, TopicGroupHoursDto>(StringComparer.CurrentCultureIgnoreCase);
+                    completedHoursDict[row.TopicId] = hoursByGroup;
+                }
+
+                if (!hoursByGroup.TryGetValue(row.GroupName, out var stat))
+                {
+                    stat = new TopicGroupHoursDto(row.GroupName, 0, 0);
+                }
+                var aud = stat.AuditoriumHours + (row.IsSelfStudy ? 0 : 1);
+                var self = stat.SelfStudyHours + (row.IsSelfStudy ? 1 : 0);
+                hoursByGroup[row.GroupName] = new TopicGroupHoursDto(row.GroupName, aud, self);
+            }
         }
 
         var result = topics.Select(t =>
         {
             var planned = plannedDict.TryGetValue(t.Id, out var pg) ? new List<string>(pg) : new List<string>();
             var completed = completedDict.TryGetValue(t.Id, out var cg) ? new List<string>(cg) : new List<string>();
+            var plannedHours = plannedHoursDict.TryGetValue(t.Id, out var ph)
+                ? ph.Values.OrderBy(x => x.GroupName, StringComparer.CurrentCultureIgnoreCase).ToList()
+                : new List<TopicGroupHoursDto>();
+            var completedHours = completedHoursDict.TryGetValue(t.Id, out var ch)
+                ? ch.Values.OrderBy(x => x.GroupName, StringComparer.CurrentCultureIgnoreCase).ToList()
+                : new List<TopicGroupHoursDto>();
             var lessonTypeCode = t.LessonType?.Code ?? string.Empty;
             var lessonTypeName = t.LessonType?.Name ?? string.Empty;
             return new ModuleTopicViewDto(
@@ -404,7 +448,9 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
                 t.AuditoriumHours,
                 t.SelfStudyHours,
                 planned,
-                completed
+                completed,
+                plannedHours,
+                completedHours
             );
         }).ToList();
 

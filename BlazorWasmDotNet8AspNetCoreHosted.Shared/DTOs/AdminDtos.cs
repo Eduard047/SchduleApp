@@ -66,10 +66,11 @@ public record class TeacherEditDto
     { Id = id; FullName = fullName; ScientificDegree = scientificDegree; AcademicTitle = academicTitle; }
 
     public TeacherEditDto(int? id, string fullName, string? scientificDegree, string? academicTitle,
-        List<int> moduleIds, List<TeacherLoadDto> loads, List<TeacherWorkingHourDto> workingHours)
+        List<int> moduleIds, List<int> supervisorModuleIds, List<TeacherLoadDto> loads, List<TeacherWorkingHourDto> workingHours)
     {
         Id = id; FullName = fullName; ScientificDegree = scientificDegree; AcademicTitle = academicTitle;
         ModuleIds = moduleIds ?? new();
+        SupervisorModuleIds = supervisorModuleIds ?? new();
         Loads = loads ?? new();
         WorkingHours = workingHours ?? new();
     }
@@ -79,6 +80,7 @@ public record class TeacherEditDto
     public string? ScientificDegree { get; set; }
     public string? AcademicTitle { get; set; }
     public List<int> ModuleIds { get; set; } = new();
+    public List<int> SupervisorModuleIds { get; set; } = new();
     public List<TeacherLoadDto> Loads { get; set; } = new();
     public List<TeacherWorkingHourDto> WorkingHours { get; set; } = new();
 }
@@ -112,6 +114,7 @@ public record class TeacherViewDto
     public string? ScientificDegree { get; set; }
     public string? AcademicTitle { get; set; }
     public List<int> ModuleIds { get; set; } = new();
+    public List<int> SupervisorModuleIds { get; set; } = new();
     public List<TeacherLoadDto> Loads { get; set; } = new();
     public List<TeacherWorkingHourDto> WorkingHours { get; set; } = new();
 }

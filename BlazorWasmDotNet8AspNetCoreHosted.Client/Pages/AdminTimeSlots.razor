@@ -75,11 +75,11 @@
                             </td>
                             <td>
                                 <input class="form-control form-control-sm" style="width:120px"
-                                       placeholder="08:30" @bind="r.Start" />
+                                       placeholder="09:00" @bind="r.Start" />
                             </td>
                             <td>
                                 <input class="form-control form-control-sm" style="width:120px"
-                                       placeholder="10:00" @bind="r.End" />
+                                       placeholder="09:45" @bind="r.End" />
                             </td>
                             <td>
                                 <input class="form-check-input" type="checkbox" @bind="r.IsActive" />
@@ -94,16 +94,16 @@
         </table>
 
         <div class="form-text">
-            Порада: Тримайте тривалості однаковими (наприклад, 90 хвилин), тоді обід краще задавати окремим слотом (наприклад 12:00–13:00),
+            Порада: Тримайте тривалості однаковими (наприклад, 45 хвилин), тоді обід краще задавати окремим слотом (наприклад 12:00–13:00),
             щоб він займав місце пари автоматично.
         </div>
     </div>
 </div>
 
 @code {
-    private static readonly TimeOnly DefaultStart = new(8, 30);
-    private static readonly TimeSpan DefaultDuration = TimeSpan.FromMinutes(90);
-    private static readonly TimeSpan DefaultBreak = TimeSpan.FromMinutes(15);
+    private static readonly TimeOnly DefaultStart = new(9, 0);
+    private static readonly TimeSpan DefaultDuration = TimeSpan.FromMinutes(45);
+    private static readonly TimeSpan DefaultBreak = TimeSpan.FromMinutes(10);
     enum Scope { Global, Course }
 
     private Scope _scope = Scope.Global;

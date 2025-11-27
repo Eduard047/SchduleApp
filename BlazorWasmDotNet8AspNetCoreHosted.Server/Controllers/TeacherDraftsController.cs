@@ -207,7 +207,8 @@ public sealed class TeacherDraftsController : ControllerBase
             RescheduledFromLessonTypeId: rescheduleInfo.originalLessonTypeId,
             BatchKey: i.BatchKey,
             TeacherNames: teacherNames,
-            LessonTypeCss: i.LessonType.CssKey
+            LessonTypeCss: i.LessonType.CssKey,
+            IsSelfStudy: i.IsSelfStudy
         );
         }).ToList();
     }
@@ -469,6 +470,7 @@ public sealed class TeacherDraftsController : ControllerBase
         }
 
         var entries = new List<string>();
+        if (item.IsSelfStudy) entries.Add("Самостійна робота");
         if (!string.IsNullOrWhiteSpace(item.Module)) entries.Add(item.Module);
         if (!string.IsNullOrWhiteSpace(item.TopicCode)) entries.Add(item.TopicCode);
         if (!string.IsNullOrWhiteSpace(item.Teacher)) entries.Add(item.Teacher);
@@ -572,6 +574,7 @@ public sealed class TeacherDraftsController : ControllerBase
         item.RoomId = normalizedRoomId;
         item.LessonTypeId = request.LessonTypeId;
         item.IsLocked = request.IsLocked;
+        item.IsSelfStudy = request.IsSelfStudy;
         item.ValidationWarnings = validationReport;
         item.Status = DraftStatus.Draft;
     }
@@ -801,6 +804,7 @@ public sealed class TeacherDraftsController : ControllerBase
         }
 
         var teachersForModule = await _db.TeacherModules.AsNoTracking().ToListAsync();
+        var supervisorsForModule = await _db.ModuleSupervisors.AsNoTracking().ToListAsync();
 
         var teacherNames = await _db.Teachers
             .AsNoTracking()
@@ -852,6 +856,20 @@ public sealed class TeacherDraftsController : ControllerBase
             .ToDictionary(t => t.Id, t => Math.Max(0, t.AuditoriumHours));
         var moduleAuditoriumHours = topicsByModule
             .ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Sum(t => Math.Max(0, t.AuditoriumHours)));
+        var moduleSelfStudyHours = topicsByModule
+            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Sum(t => Math.Max(0, t.SelfStudyHours)));
+        var selfStudyAssignmentsDraft = await _db.TeacherDraftItems
+            .Where(di => di.IsSelfStudy && courseIds.Contains(di.Group.CourseId))
+            .Select(di => new { di.GroupId, di.ModuleId })
+            .ToListAsync();
+        var selfStudyAssignmentsSchedule = await _db.ScheduleItems
+            .Where(si => si.IsSelfStudy && courseIds.Contains(si.Group.CourseId))
+            .Select(si => new { si.GroupId, si.ModuleId })
+            .ToListAsync();
+        var selfStudyAssignments = selfStudyAssignmentsDraft
+            .Concat(selfStudyAssignmentsSchedule)
+            .GroupBy(x => (x.GroupId, x.ModuleId))
+            .ToDictionary(g => g.Key, g => g.Count());
         var topicAssignmentsDraft = await _db.TeacherDraftItems
             .Where(di => di.ModuleTopicId != null && courseIds.Contains(di.Group.CourseId))
             .Select(di => new { di.GroupId, di.ModuleId, TopicId = di.ModuleTopicId!.Value })
@@ -1129,7 +1147,9 @@ public sealed class TeacherDraftsController : ControllerBase
             int n = courseGroups.Count;
             int baseShare = plan.TargetHours / n;
             int extra = plan.TargetHours % n;
-            var moduleMinHours = moduleAuditoriumHours.TryGetValue(plan.ModuleId, out var minHours) ? minHours : 0;
+            var moduleMinHours =
+                (moduleAuditoriumHours.TryGetValue(plan.ModuleId, out var minHours) ? minHours : 0)
+                + (moduleSelfStudyHours.TryGetValue(plan.ModuleId, out var ssHours) ? ssHours : 0);
 
             for (int i = 0; i < n; i++)
             {
@@ -1142,6 +1162,28 @@ public sealed class TeacherDraftsController : ControllerBase
         }
         int RemainingFor(int gid, int mid) =>
             remainingByGroupModule.TryGetValue((gid, mid), out var left) ? left : 0;
+
+        var selfStudyRemainingByGroupModule = new Dictionary<(int GroupId, int ModuleId), int>();
+        foreach (var plan in activePlans)
+        {
+            if (!allGroupsByCourse.TryGetValue(plan.CourseId, out var courseGroups) || courseGroups.Count == 0)
+                continue;
+
+            var selfHours = moduleSelfStudyHours.TryGetValue(plan.ModuleId, out var ssTotal)
+                ? ssTotal
+                : 0;
+            if (selfHours <= 0) continue;
+
+            foreach (var grpRow in courseGroups)
+            {
+                var key = (grpRow.Id, plan.ModuleId);
+                var fact = selfStudyAssignments.TryGetValue(key, out var used) ? used : 0;
+                selfStudyRemainingByGroupModule[key] = Math.Max(0, selfHours - fact);
+            }
+        }
+
+        int SelfStudyRemaining(int gid, int mid) =>
+            selfStudyRemainingByGroupModule.TryGetValue((gid, mid), out var left) ? left : 0;
 
 
 
@@ -1479,17 +1521,26 @@ public sealed class TeacherDraftsController : ControllerBase
                     return false;
                 }
 
-                var tids = teachersForModule
-                    .Where(x => x.ModuleId == moduleId)
-                    .Select(x => x.TeacherId)
+                bool placeSelfStudy = SelfStudyRemaining(grp.Id, moduleId) > 0;
+                var tids = (placeSelfStudy
+                        ? supervisorsForModule.Where(x => x.ModuleId == moduleId).Select(x => x.TeacherId)
+                        : teachersForModule.Where(x => x.ModuleId == moduleId).Select(x => x.TeacherId))
                     .Distinct()
                     .OrderBy(id => id)
                     .ToList();
                 if (tids.Count == 0)
                 {
-                    var teacherReason = $"Не знайдено викладачів для модуля <{ModuleLabel()}> (група {grp.Name}).";
+                    var teacherReason = placeSelfStudy
+                        ? $"Не знайдено керівників для модуля <{ModuleLabel()}> (група {grp.Name}). Самостійну годину пропущено."
+                        : $"Не знайдено викладачів для модуля <{ModuleLabel()}> (група {grp.Name}).";
                     RecordSlotFailureReasonForAllSlots(date, teacherReason);
                     warnings.Add(teacherReason);
+                    if (placeSelfStudy)
+                    {
+                        var key = (grp.Id, moduleId);
+                        if (selfStudyRemainingByGroupModule.ContainsKey(key))
+                            selfStudyRemainingByGroupModule[key] = 0;
+                    }
                     skipped++;
                     return false;
                 }
@@ -1530,9 +1581,22 @@ public sealed class TeacherDraftsController : ControllerBase
                             continue;
                         }
 
-                        var pickResult = PickLessonType(grp.Id, grp.CourseId, moduleId, date);
-                        var ltypeId = pickResult.LessonTypeId;
-                        var topicSelection = pickResult.Topic;
+                        var isSelfStudyPlacement = placeSelfStudy && SelfStudyRemaining(grp.Id, moduleId) > 0;
+                        ModuleTopic? topicSelection = null;
+                        int ltypeId;
+                        if (isSelfStudyPlacement)
+                        {
+                            topicSelection = topicsByModule.TryGetValue(moduleId, out var list)
+                                ? list.FirstOrDefault(t => t.SelfStudyHours > 0)
+                                : null;
+                            ltypeId = topicSelection?.LessonTypeId ?? PickLessonType(grp.Id, grp.CourseId, moduleId, date).LessonTypeId;
+                        }
+                        else
+                        {
+                            var pickResult = PickLessonType(grp.Id, grp.CourseId, moduleId, date);
+                            ltypeId = pickResult.LessonTypeId;
+                            topicSelection = pickResult.Topic;
+                        }
                         if (!TypeAllowed(ltypeId))
                         {
                             if (!typeById.TryGetValue(ltypeId, out var ltInfo))
@@ -1591,11 +1655,12 @@ public sealed class TeacherDraftsController : ControllerBase
                                     ModuleTopicId = topicSelection?.Id,
                                     LessonTypeId = ltypeId,
                                     Status = DraftStatus.Draft,
-                                    IsLocked = false
+                                    IsLocked = false,
+                                    IsSelfStudy = isSelfStudyPlacement
                                 };
                                 _db.TeacherDraftItems.Add(item);
 
-                                if (topicSelection is not null)
+                                if (topicSelection is not null && !isSelfStudyPlacement)
                                 {
                                     MarkTopicUsed(grp.Id, moduleId, topicSelection);
                                 }
@@ -1615,6 +1680,10 @@ public sealed class TeacherDraftsController : ControllerBase
                                 Inc(grp.Id, date);
                                 hasPreferred.Add((grp.Id, moduleId));
 
+                                if (isSelfStudyPlacement && selfStudyRemainingByGroupModule.TryGetValue(remainingKey, out var ssLeft) && ssLeft > 0)
+                                {
+                                    selfStudyRemainingByGroupModule[remainingKey] = Math.Max(0, ssLeft - 1);
+                                }
                                 if (remainingByGroupModule.TryGetValue(remainingKey, out var left) && left > 0)
                                 {
                                     left--;
@@ -1648,11 +1717,12 @@ public sealed class TeacherDraftsController : ControllerBase
                                 ModuleTopicId = topicSelection?.Id,
                                 LessonTypeId = ltypeId,
                                 Status = DraftStatus.Draft,
-                                IsLocked = false
+                                IsLocked = false,
+                                IsSelfStudy = isSelfStudyPlacement
                             };
                             _db.TeacherDraftItems.Add(item);
 
-                            if (topicSelection is not null)
+                            if (topicSelection is not null && !isSelfStudyPlacement)
                             {
                                 MarkTopicUsed(grp.Id, moduleId, topicSelection);
                             }
@@ -1672,6 +1742,10 @@ public sealed class TeacherDraftsController : ControllerBase
                             Inc(grp.Id, date);
                             hasPreferred.Add((grp.Id, moduleId));
 
+                            if (isSelfStudyPlacement && selfStudyRemainingByGroupModule.TryGetValue(remainingKey, out var ssLeft) && ssLeft > 0)
+                            {
+                                selfStudyRemainingByGroupModule[remainingKey] = Math.Max(0, ssLeft - 1);
+                            }
                             if (remainingByGroupModule.TryGetValue(remainingKey, out var left) && left > 0)
                             {
                                 left--;
@@ -1942,7 +2016,8 @@ public sealed class TeacherDraftsController : ControllerBase
                 TeacherId = d.TeacherId,
                 ModuleTopicId = d.ModuleTopicId,
                 LessonTypeId = d.LessonTypeId,
-                IsLocked = false
+                IsLocked = false,
+                IsSelfStudy = d.IsSelfStudy
             };
             _db.ScheduleItems.Add(item);
             created++;

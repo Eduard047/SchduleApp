@@ -320,15 +320,11 @@
                                     <td>@topic.AuditoriumHours</td>
                                     <td>@topic.SelfStudyHours</td>
                                     <td class="module-topics-col-groups">
-                                        <span class="topic-text-truncate" title="@string.Join(", ", topic.PlannedGroups)">
-                                            @string.Join(", ", topic.PlannedGroups)
-                                        </span>
+                                        <span>@GroupsHoursCaption(topic.PlannedGroupsHours ?? new())</span>
                                     </td>
 
                                     <td class="module-topics-col-groups">
-                                        <span class="topic-text-truncate" title="@string.Join(", ", topic.CompletedGroups)">
-                                            @string.Join(", ", topic.CompletedGroups)
-                                        </span>
+                                        <span>@GroupsHoursCaption(topic.CompletedGroupsHours ?? new())</span>
                                     </td>
 
                                     <td class="module-topics-col-actions text-end">
@@ -602,6 +598,21 @@ private PlanCourseVM planCourse = new();
             .Where(name => !string.IsNullOrWhiteSpace(name));
 
         return string.Join(", ", summary);
+    }
+
+    private static string GroupsHoursCaption(IEnumerable<TopicGroupHoursDto> rows)
+    {
+        var parts = new List<string>();
+        foreach (var row in rows)
+        {
+            var chunks = new List<string>();
+            if (row.AuditoriumHours > 0) chunks.Add($"{row.AuditoriumHours} год. ауд.");
+            if (row.SelfStudyHours > 0) chunks.Add($"{row.SelfStudyHours} год. сам.");
+            var suffix = chunks.Count > 0 ? $" ({string.Join(", ", chunks)})" : string.Empty;
+            parts.Add($"{row.GroupName}{suffix}");
+        }
+
+        return parts.Count == 0 ? "—" : string.Join("; ", parts);
     }
     /// <summary>
     /// Заповнює форму даними модуля для редагування.

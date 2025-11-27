@@ -30,6 +30,8 @@ public static class DefaultLessonTypesSeeder
             new SeedLessonType("BREAK", "Перерва", "brk", true, false, false, false, false, false, false, false),
             new SeedLessonType("CANCELED", "Скасовано", "can", true, false, false, false, false, false, false, false),
             new SeedLessonType("RESCHEDULED", "Перенесено", "res", true, false, false, false, false, false, false, false),
+            new SeedLessonType("EXAM", "Екзамен", "exam", true, true, true, true, true, true, true, false),
+            new SeedLessonType("CREDIT", "Залік", "credit", true, true, true, true, true, true, true, false),
         };
 
         var existing = await db.LessonTypes.ToListAsync();

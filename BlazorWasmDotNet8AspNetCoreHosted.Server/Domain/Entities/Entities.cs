@@ -51,6 +51,7 @@ public class Teacher
     public string? AcademicTitle { get; set; } 
 
     public ICollection<TeacherModule> TeacherModules { get; set; } = new List<TeacherModule>();
+    public ICollection<ModuleSupervisor> ModuleSupervisions { get; set; } = new List<ModuleSupervisor>();
 }
 
 public class TeacherCourseLoad
@@ -98,6 +99,7 @@ public class Module
 
     public ICollection<ModuleCourse> ModuleCourses { get; set; } = new List<ModuleCourse>();
     public ICollection<TeacherModule> TeacherModules { get; set; } = new List<TeacherModule>();
+    public ICollection<ModuleSupervisor> ModuleSupervisors { get; set; } = new List<ModuleSupervisor>();
     public ICollection<ModuleRoom> AllowedRooms { get; set; } = new List<ModuleRoom>();
     public ICollection<ModuleBuilding> AllowedBuildings { get; set; } = new List<ModuleBuilding>();
     
@@ -114,6 +116,15 @@ public class ModuleCourse
 }
 
 public class TeacherModule
+{
+    public int TeacherId { get; set; }
+    public Teacher Teacher { get; set; } = default!;
+
+    public int ModuleId { get; set; }
+    public Module Module { get; set; } = default!;
+}
+
+public class ModuleSupervisor
 {
     public int TeacherId { get; set; }
     public Teacher Teacher { get; set; } = default!;
@@ -238,6 +249,7 @@ public class ScheduleItem
     public Room? Room { get; set; }
 
     public bool IsLocked { get; set; } = false;
+    public bool IsSelfStudy { get; set; } = false;
 }
 
 
@@ -329,6 +341,7 @@ public class TeacherDraftItem
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     public bool IsLocked { get; set; }   
 
+    public bool IsSelfStudy { get; set; } = false;
 }
 
 
