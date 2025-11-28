@@ -87,12 +87,6 @@ public class Module
     public string Title { get; set; } = default!;
     
     public decimal Credits { get; set; }
-    
-    public string? Competences { get; set; }
-    
-    public string? LearningOutcomes { get; set; }
-    
-    public string? ReportingForm { get; set; }
 
     public int CourseId { get; set; }
     public Course Course { get; set; } = default!;

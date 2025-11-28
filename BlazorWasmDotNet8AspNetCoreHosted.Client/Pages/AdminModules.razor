@@ -373,10 +373,7 @@
         AllowedRoomIds = new(),
         AllowedBuildingIds = new(),
         CloneCourseIds = new(),
-        Credits = 0,
-        Competences = string.Empty,
-        LearningOutcomes = string.Empty,
-        ReportingForm = string.Empty
+        Credits = 0
     };
 
     private List<LookupDto> courses = new();
@@ -619,7 +616,7 @@ private PlanCourseVM planCourse = new();
     /// </summary>
     private void Edit(ModuleEditDto m)
     {
-        form = new(m.Id, m.Code, m.Title, m.CourseId, new List<int>(m.AllowedRoomIds), new List<int>(m.AllowedBuildingIds), m.Credits, m.Competences, m.LearningOutcomes, m.ReportingForm);
+        form = new(m.Id, m.Code, m.Title, m.CourseId, new List<int>(m.AllowedRoomIds), new List<int>(m.AllowedBuildingIds), m.Credits);
         form.CloneCourseIds = new List<int>(m.CloneCourseIds ?? new());
         ApplySelectedCourses(ModuleCourseIds(m));
         EnsureBuildingsCoverSelectedRooms();
@@ -654,10 +651,7 @@ private PlanCourseVM planCourse = new();
                 AllowedRoomIds = new(),
                 AllowedBuildingIds = new(),
                 CloneCourseIds = new(),
-                Credits = 0,
-                Competences = string.Empty,
-                LearningOutcomes = string.Empty,
-                ReportingForm = string.Empty
+                Credits = 0
             };
             UpdateVisibleRooms();
         }

@@ -41,9 +41,6 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
                 m.Title,
                 m.CourseId,
                 m.Credits,
-                m.Competences,
-                m.LearningOutcomes,
-                m.ReportingForm,
                 
                 AllowedRoomIds = m.AllowedRooms.Select(ar => ar.RoomId).ToList(),
                 AllowedBuildingIds = m.AllowedBuildings.Select(ab => ab.BuildingId).ToList(),
@@ -85,9 +82,6 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
             m.CourseId = dto.CourseId;
             
             m.Credits = dto.Credits;
-            m.Competences = dto.Competences;
-            m.LearningOutcomes = dto.LearningOutcomes;
-            m.ReportingForm = dto.ReportingForm;
 
             
             var oldRoomIds = m.AllowedRooms.Select(x => x.RoomId).ToHashSet();
@@ -159,10 +153,7 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
                 Code = dto.Code,
                 Title = dto.Title,
                 CourseId = dto.CourseId,
-                Credits = dto.Credits,
-                Competences = dto.Competences,
-                LearningOutcomes = dto.LearningOutcomes,
-                ReportingForm = dto.ReportingForm
+                Credits = dto.Credits
             };
             db.Modules.Add(m);
             await db.SaveChangesAsync();

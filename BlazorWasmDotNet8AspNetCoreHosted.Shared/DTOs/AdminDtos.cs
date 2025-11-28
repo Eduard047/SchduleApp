@@ -25,7 +25,7 @@ public record class ModuleEditDto
     }
 
     public ModuleEditDto(int? id, string code, string title, int courseId,
-        decimal credits = 0m, string? competences = null, string? learningOutcomes = null, string? reportingForm = null)
+        decimal credits = 0m)
         : this()
     {
         Id = id;
@@ -33,14 +33,11 @@ public record class ModuleEditDto
         Title = title;
         CourseId = courseId;
         Credits = credits;
-        Competences = competences;
-        LearningOutcomes = learningOutcomes;
-        ReportingForm = reportingForm;
     }
 
     public ModuleEditDto(int? id, string code, string title, int courseId, List<int> allowedRoomIds, List<int> allowedBuildingIds,
-        decimal credits = 0m, string? competences = null, string? learningOutcomes = null, string? reportingForm = null)
-        : this(id, code, title, courseId, credits, competences, learningOutcomes, reportingForm)
+        decimal credits = 0m)
+        : this(id, code, title, courseId, credits)
     {
         AllowedRoomIds = allowedRoomIds ?? new();
         AllowedBuildingIds = allowedBuildingIds ?? new();
@@ -54,9 +51,6 @@ public record class ModuleEditDto
     public List<int> AllowedBuildingIds { get; set; } = new();
     public List<int> CloneCourseIds { get; set; } = new();
     public decimal Credits { get; set; }
-    public string? Competences { get; set; }
-    public string? LearningOutcomes { get; set; }
-    public string? ReportingForm { get; set; }
 }
 
 public record class TeacherEditDto
