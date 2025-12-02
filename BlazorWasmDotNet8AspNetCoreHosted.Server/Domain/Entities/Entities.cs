@@ -85,7 +85,7 @@ public class Module
     public int Id { get; set; }
     public string Code { get; set; } = default!;
     public string Title { get; set; } = default!;
-    
+
     public decimal Credits { get; set; }
 
     public int CourseId { get; set; }

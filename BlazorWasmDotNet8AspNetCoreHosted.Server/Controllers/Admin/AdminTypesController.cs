@@ -36,6 +36,14 @@ public class AdminTypesController(AppDbContext db) : ControllerBase
             ["c14"] = new("Лайм", "#D6F5A3"),
             ["c15"] = new("Персик", "#FFD2B3"),
             ["c16"] = new("Стальний-2", "#CED7E5"),
+            ["c17"] = new("Янтар", "#FFC872"),
+            ["c18"] = new("Пастельно-рожевий", "#FFD1DC"),
+            ["c19"] = new("Оливковий", "#CFE3B4"),
+            ["c20"] = new("Морська хвиля", "#B7E4E0"),
+            ["c21"] = new("Світла слива", "#E6C2E9"),
+            ["c22"] = new("Світлий графіт", "#D3DAE3"),
+            ["c23"] = new("М'ята-лайм", "#CDEFB8"),
+            ["c24"] = new("Сонячний", "#FFE6B5"),
         };
 
     

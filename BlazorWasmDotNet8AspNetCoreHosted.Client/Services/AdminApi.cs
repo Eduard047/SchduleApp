@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Net.Http.Json;
+using Microsoft.AspNetCore.Components.Forms;
 using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 
 namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
@@ -198,6 +199,34 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
 
         public async Task SaveModuleSequence(ModuleSequenceSaveRequestDto dto)
             => await Ensure(await _http.PostAsJsonAsync("api/admin/module-sequence/save", dto));
+
+        public async Task<DocxImportResultDto> ImportModulesFromDocx(IBrowserFile file, bool apply, CancellationToken ct = default)
+        {
+            var url = $"api/admin/modules/import-docx?apply={(apply ? "true" : "false")}";
+            var content = new MultipartFormDataContent();
+            // Ліміт стріму щоб уникнути завантаження надвеликих файлів у пам’ять.
+            var stream = file.OpenReadStream(50 * 1024 * 1024, ct);
+            var streamContent = new StreamContent(stream);
+            streamContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(file.ContentType ?? "application/octet-stream");
+            content.Add(streamContent, "file", file.Name);
+
+            var resp = await _http.PostAsync(url, content, ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                var body = await resp.Content.ReadAsStringAsync(ct);
+                var msg = string.IsNullOrWhiteSpace(body) ? resp.ReasonPhrase : body;
+                throw new HttpRequestException(msg ?? "Import failed", null, resp.StatusCode);
+            }
+
+            return await resp.Content.ReadFromJsonAsync<DocxImportResultDto>(cancellationToken: ct)
+                   ?? new DocxImportResultDto(string.Empty, null, false, new(), new(), "Порожня відповідь сервера");
+        }
+
+        public async Task ClearModulesAndPlans()
+        {
+            var resp = await _http.PostAsync("api/admin/modules/clear-all", null);
+            await Ensure(resp);
+        }
     }
 }
 

@@ -5,7 +5,9 @@
 @using System.Linq
 @using System.Collections.Generic
 @using System.Text.RegularExpressions
+@using System.Text.Json
 @using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs
+@using Microsoft.AspNetCore.Components.Forms
 @inject BlazorWasmDotNet8AspNetCoreHosted.Client.Services.IAdminApi Admin
 @inject IJSRuntime JS
 @inject HttpClient Http
@@ -25,6 +27,112 @@
     <div class="alert alert-success">@ok</div>
 }
 
+<div class="card p-3 mb-3">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <h5 class="mb-0">Імпорт модулів з .docx</h5>
+        @if (importBusy)
+        {
+            <span class="text-muted small">Завантаження...</span>
+        }
+    </div>
+    <div class="row g-3 align-items-end">
+        <div class="col-12 col-md-6">
+            <label class="form-label d-block">Файл .docx</label>
+            <InputFile class="d-none" id="docxFileInput" OnChange="OnImportFileChange" accept=".docx" />
+            <label for="docxFileInput" class="btn btn-outline-secondary me-2 mb-2">Оберіть файл</label>
+            <span class="text-muted small">@ImportFileCaption</span>
+        </div>
+        <div class="col-12 col-md-6 d-flex flex-wrap gap-2">
+            <button class="btn btn-outline-primary"
+                    @onclick="() => ImportDocx(false)"
+                    disabled="@(importBusy || importFile is null)">
+                Попередній перегляд
+            </button>
+            <button class="btn btn-primary"
+                    @onclick="() => ImportDocx(true)"
+                    disabled="@(importBusy || importFile is null)">
+                Імпортувати
+            </button>
+        </div>
+    </div>
+    @if (!string.IsNullOrWhiteSpace(importError))
+    {
+        <div class="alert alert-danger mt-3">@importError</div>
+    }
+    @if (!string.IsNullOrWhiteSpace(importOk))
+    {
+        <div class="alert alert-success mt-3">@importOk</div>
+    }
+    @if (importResult is not null)
+    {
+        <div class="mt-3">
+            <div class="d-flex flex-wrap gap-3 align-items-center">
+                <span class="fw-semibold">Курс: @importResult.CourseName</span>
+                <span class="badge @(importResult.CourseFound ? "bg-success" : "bg-danger")">
+                    @(importResult.CourseFound ? "Знайдено у БД" : "Не знайдено у БД")
+                </span>
+                <span class="text-muted small">Модулів: @importResult.Modules.Count | Занять: @ImportedTopicsCount</span>
+            </div>
+            @if (importResult.Warnings.Any())
+            {
+                <div class="alert alert-warning mt-2">
+                    <div class="fw-semibold mb-1">Попередження:</div>
+                    <ul class="mb-0">
+                        @foreach (var w in importResult.Warnings.Take(10))
+                        {
+                            <li>@w</li>
+                        }
+                        @if (importResult.Warnings.Count > 10)
+                        {
+                            <li>... ще @((importResult.Warnings.Count - 10)) попереджень</li>
+                        }
+                    </ul>
+                </div>
+            }
+            <div class="table-responsive mt-3">
+                <table class="table table-sm">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Код</th>
+                            <th>Назва</th>
+                            <th>Кредити</th>
+                            <th>Занять</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var m in importResult.Modules)
+                        {
+                            <tr>
+                                <td>@m.Code</td>
+                                <td>@m.Title</td>
+                                <td>@m.Credits</td>
+                                <td>@(m.Topics?.Count ?? 0)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+</div>
+
+<div class="card p-3 mb-3">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+        <div>
+            <h5 class="mb-0">Очистити всі модулі</h5>
+            <div class="text-muted small">Видаляє всі модулі, плани та теми.</div>
+        </div>
+        <button class="btn btn-outline-danger" @onclick="ClearAllModules" disabled="@clearBusy">Очистити все</button>
+    </div>
+    @if (!string.IsNullOrWhiteSpace(clearError))
+    {
+        <div class="alert alert-danger mt-2">@clearError</div>
+    }
+    @if (!string.IsNullOrWhiteSpace(clearOk))
+    {
+        <div class="alert alert-success mt-2">@clearOk</div>
+    }
+</div>
 
 <div class="card p-3 mb-3">
     <div class="row g-2">
@@ -361,6 +469,14 @@
 @code {
     
     private string? error, ok;
+    private IBrowserFile? importFile;
+    private DocxImportResultDto? importResult;
+    private bool importBusy;
+    private string? importError;
+    private string? importOk;
+    private bool clearBusy;
+    private string? clearError;
+    private string? clearOk;
 
     
     private List<ModuleEditDto> items = new();
@@ -399,7 +515,8 @@ private PlanCourseVM planCourse = new();
     
     private ModuleTopicFormVM topicForm = new();
     private string topicCodeInput = string.Empty;
-    private static readonly Regex TopicCodePattern = new(@"^\d+(\.\d+)*$");
+    // Дозволяємо літери/цифри/крапки/дефіси, щоб підтримати коди на кшталт КП.1.1
+    private static readonly Regex TopicCodePattern = new(@"^[A-Za-zА-Яа-яІіЇїЄєҐґ0-9._-]+$");
 
     
     private const string CourseField = "CourseName";
@@ -411,6 +528,95 @@ private PlanCourseVM planCourse = new();
     /// </summary>
 
     protected override async Task OnInitializedAsync() => await Load();
+
+    private int ImportedTopicsCount => importResult?.Modules?.Sum(m => m.Topics?.Count ?? 0) ?? 0;
+    private string ImportFileCaption => importFile is null
+        ? "Файл не обрано"
+        : $"{importFile.Name} ({Math.Round(importFile.Size / 1024.0, 1)} КБ)";
+
+    private async Task OnImportFileChange(InputFileChangeEventArgs e)
+    {
+        importFile = e.FileCount > 0 ? e.File : null;
+        importResult = null;
+        importError = null;
+        importOk = null;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ImportDocx(bool apply)
+    {
+        if (importFile is null)
+        {
+            importError = "Оберіть .docx файл для імпорту.";
+            importOk = null;
+            return;
+        }
+
+        try
+        {
+            importBusy = true;
+            importError = null;
+            importOk = null;
+
+            importResult = await Admin.ImportModulesFromDocx(importFile, apply);
+            importOk = apply ? "Імпорт виконано." : "Прев’ю імпорту отримано.";
+
+            if (apply)
+            {
+                await Load();
+            }
+        }
+        catch (Exception ex)
+        {
+            importError = TryParseImportError(ex.Message);
+        }
+        finally
+        {
+            importBusy = false;
+        }
+    }
+
+    private string TryParseImportError(string message)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(message);
+            var root = doc.RootElement;
+            var msg = root.TryGetProperty("message", out var m) ? m.GetString() : message;
+            var warns = root.TryGetProperty("warnings", out var w) && w.ValueKind == JsonValueKind.Array
+                ? string.Join("; ", w.EnumerateArray().Select(x => x.GetString()).Where(s => !string.IsNullOrWhiteSpace(s))!)
+                : null;
+            return string.IsNullOrWhiteSpace(warns) ? msg ?? message : $"{msg}: {warns}";
+        }
+        catch
+        {
+            return message;
+        }
+    }
+
+    private async Task ClearAllModules()
+    {
+        clearError = null;
+        clearOk = null;
+        var confirm = await JS.InvokeAsync<bool>("confirm", "Видалити всі модулі, плани та теми?");
+        if (!confirm) return;
+
+        try
+        {
+            clearBusy = true;
+            await Admin.ClearModulesAndPlans();
+            clearOk = "Усі модулі та плани очищено.";
+            await Load();
+        }
+        catch (Exception ex)
+        {
+            clearError = ex.Message;
+        }
+        finally
+        {
+            clearBusy = false;
+        }
+    }
 
     
     /// <summary>
@@ -1000,7 +1206,7 @@ private PlanCourseVM planCourse = new();
 
             {
 
-                error = "Код заняття має містити лише числа, розділені крапками.";
+                error = "Код заняття обовʼязковий.";
 
                 return;
 

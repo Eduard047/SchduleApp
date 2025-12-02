@@ -9,6 +9,8 @@ using BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Domain.Entities;
 using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
+using BlazorWasmDotNet8AspNetCoreHosted.Server.Application;
+using Microsoft.AspNetCore.Http;
 
 namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Admin;
 
@@ -21,12 +23,6 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Admin;
 [Route("api/admin/modules")]
 public class AdminModulesController(AppDbContext db) : ControllerBase
 {
-    
-    private static readonly Regex TopicCodeRegex = new(@"^\d+(\.\d+)*$", RegexOptions.Compiled);
-    
-    
-    
-    
     
     
     [HttpGet]
@@ -465,9 +461,6 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
         if (string.IsNullOrWhiteSpace(trimmedTopicCode))
             return BadRequest("Topic code is required");
 
-        if (!TopicCodeRegex.IsMatch(trimmedTopicCode))
-            return BadRequest("Invalid topic code format");
-
         var normalizedTopicCode = trimmedTopicCode;
         var topicId = dto.Id ?? 0;
 
@@ -532,6 +525,37 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
         db.ModuleTopics.Remove(topic);
         await db.SaveChangesAsync();
         await RecalculateModuleTopicOrder(moduleId);
+        return NoContent();
+    }
+
+    [HttpPost("import-docx")]
+    public async Task<ActionResult<DocxImportResultDto>> ImportDocx([FromForm] IFormFile file, [FromQuery] bool apply = false, CancellationToken ct = default)
+    {
+        var service = new DocxImportService();
+        var result = await service.ImportAsync(file, db, apply, ct);
+
+        if (!string.IsNullOrWhiteSpace(result.Error))
+        {
+            return BadRequest(new { message = result.Error, warnings = result.Warnings });
+        }
+
+        return Ok(result);
+    }
+
+    [HttpPost("clear-all")]
+    public async Task<IActionResult> ClearAll()
+    {
+        // Обережно: тотальне очищення модулів і пов'язаних планів.
+        await db.ModuleTopics.ExecuteDeleteAsync();
+        await db.ModulePlans.ExecuteDeleteAsync();
+        await db.ModuleSequenceItems.ExecuteDeleteAsync();
+        await db.ModuleFillers.ExecuteDeleteAsync();
+        await db.ModuleRooms.ExecuteDeleteAsync();
+        await db.ModuleBuildings.ExecuteDeleteAsync();
+        await db.ModuleCourses.ExecuteDeleteAsync();
+        await db.TeacherModules.ExecuteDeleteAsync();
+        await db.ModuleSupervisors.ExecuteDeleteAsync();
+        await db.Modules.ExecuteDeleteAsync();
         return NoContent();
     }
 

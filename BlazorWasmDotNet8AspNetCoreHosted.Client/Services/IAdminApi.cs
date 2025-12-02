@@ -1,4 +1,5 @@
 using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
+using Microsoft.AspNetCore.Components.Forms;
 
 namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
 {
@@ -73,6 +74,9 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Client.Services
 
         Task<ModuleSequenceConfigDto?> GetModuleSequence(int courseId);
         Task SaveModuleSequence(ModuleSequenceSaveRequestDto dto);
+
+        Task<DocxImportResultDto> ImportModulesFromDocx(IBrowserFile file, bool apply, CancellationToken ct = default);
+        Task ClearModulesAndPlans();
     }
 }
 
