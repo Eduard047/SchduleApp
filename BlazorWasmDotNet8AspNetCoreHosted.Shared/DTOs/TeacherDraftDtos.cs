@@ -31,7 +31,8 @@ public record TeacherDraftItemDto(
     int? RescheduledFromLessonTypeId = null,
     string? BatchKey = null,
     List<string>? TeacherNames = null,
-    string? LessonTypeCss = null
+    string? LessonTypeCss = null,
+    bool IsSelfStudy = false
 );
 
 public record DraftUpsertRequest(
@@ -49,7 +50,8 @@ public record DraftUpsertRequest(
     bool OverrideNonWorkingDay = false,
     string? BatchKey = null,
     bool IsLocked = false,
-    bool IgnoreValidationErrors = false
+    bool IgnoreValidationErrors = false,
+    bool IsSelfStudy = false
 );
 
 public record DraftValidationIssueDto(

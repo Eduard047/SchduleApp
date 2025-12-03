@@ -108,17 +108,13 @@
     
     static string CssByCode(string code) => code switch
     {
-        "LECTURE" => "c1",
-        "SEMINAR" => "c2",
-        "LAB" => "c3",
-        "PRACTICE" => "c4",   
         "CANCELED" => "can",
-        "RESCHEDULED" => "res", 
+        "RESCHEDULED" => "res",
         "BREAK" => "brk",
         _ => ""
     };
 
-    private static string LessonModeLabel(bool requiresRoom) => requiresRoom ? "Аудиторний захід" : "Дистанційна форма";
+    private static string LessonModeLabel(bool requiresRoom) => requiresRoom ? "Аудиторна година" : "Без аудиторії";
 
     private string ModuleCourseCaption(int moduleId)
     {

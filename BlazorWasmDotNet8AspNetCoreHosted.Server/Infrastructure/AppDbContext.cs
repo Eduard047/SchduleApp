@@ -13,6 +13,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<Module> Modules => Set<Module>();
     public DbSet<Teacher> Teachers => Set<Teacher>();
     public DbSet<TeacherModule> TeacherModules => Set<TeacherModule>();
+    public DbSet<ModuleSupervisor> ModuleSupervisors => Set<ModuleSupervisor>();
 
     public DbSet<LessonTypeRef> LessonTypes => Set<LessonTypeRef>();
 
@@ -49,6 +50,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
         // Створюємо складені ключі для таблиць зі зв'язками багато-до-багатьох.
         b.Entity<TeacherModule>().HasKey(x => new { x.TeacherId, x.ModuleId });
+        b.Entity<ModuleSupervisor>().HasKey(x => new { x.TeacherId, x.ModuleId });
         b.Entity<ModuleRoom>().HasKey(x => new { x.ModuleId, x.RoomId });
         b.Entity<ModuleBuilding>().HasKey(x => new { x.ModuleId, x.BuildingId });
         b.Entity<ModuleCourse>().HasKey(x => new { x.ModuleId, x.CourseId });
@@ -71,6 +73,21 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(m => m.Credits)
                 .HasColumnType("decimal(6,2)")
                 .HasDefaultValue(0m);
+        });
+
+        b.Entity<ModuleSupervisor>(e =>
+        {
+            e.HasOne(x => x.Module)
+                .WithMany(m => m.ModuleSupervisors)
+                .HasForeignKey(x => x.ModuleId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasOne(x => x.Teacher)
+                .WithMany(t => t.ModuleSupervisions)
+                .HasForeignKey(x => x.TeacherId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasIndex(x => new { x.ModuleId, x.TeacherId }).IsUnique();
         });
 
         // Визначаємо зв'язки між модулями та курсами з унікальністю комбінацій.
@@ -165,6 +182,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.HasIndex(x => new { x.Date, x.GroupId });
             e.HasIndex(x => new { x.Date, x.TeacherId });
             e.HasIndex(x => new { x.Date, x.RoomId });
+
+            e.Property(x => x.IsSelfStudy).HasDefaultValue(false);
         });
 
         // Унікалізуємо винятки у календарі за датою.
@@ -221,6 +240,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
             e.Property(x => x.Status).HasConversion<int>();
             e.Property(x => x.BatchKey).HasMaxLength(64);
+            e.Property(x => x.IsSelfStudy).HasDefaultValue(false);
 
             e.HasIndex(x => new { x.Date, x.GroupId });
             e.HasIndex(x => new { x.Date, x.TeacherId });

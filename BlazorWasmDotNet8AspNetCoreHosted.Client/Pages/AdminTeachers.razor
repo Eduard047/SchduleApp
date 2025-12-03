@@ -121,6 +121,37 @@ else
         </div>
 
         <div class="col-md-12">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <label class="form-label mb-0">Керівництво самостійними роботами</label>
+                <button type="button"
+                        class="btn btn-sm btn-outline-primary"
+                        @onclick="SelectAllSupervisorModules">
+                    Вибрати всі
+                </button>
+            </div>
+            <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-2">
+                @foreach (var m in meta.Modules)
+                {
+                    var checkedFlag = edit.SupervisorModuleIds.Contains(m.Id);
+                    var checkboxId = $"teacher_sup_module_{m.Id}";
+                    <div class="col">
+                        <div class="form-check align-items-start">
+                            <input type="checkbox"
+                                   class="form-check-input"
+                                   id="@checkboxId"
+                                   checked="@checkedFlag"
+                                   @onchange="e => ToggleSupervisorModule(m.Id, AsBool(e.Value))" />
+                            <label class="form-check-label ms-2" for="@checkboxId">
+                                <span class="d-block fw-semibold">@m.Name</span>
+                                <span class="d-block text-muted small">@m.CourseName</span>
+                            </label>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <div class="col-md-12">
             <h5>Навантаження по курсам</h5>
             <table class="table table-sm">
                 <thead>
@@ -235,16 +266,24 @@ else
         edit = await Http.GetFromJsonAsync<TeacherEditDto>($"api/admin/teachers/{id}");
     }
 
+    private const string DefaultWhStart = "08:30";
+    private const string DefaultWhEnd = "19:00";
+
     private void CreateNew()
     {
+        var defaultWorkingHours = Enumerable.Range(0, 7)
+            .Select(ui => new TeacherWorkingHourDto((ui + 1) % 7, DefaultWhStart, DefaultWhEnd))
+            .ToList();
+
         edit = new TeacherEditDto(
             null,
             "",
             null,   
             null,   
             new List<int>(),
+            new List<int>(),
             new List<TeacherLoadDto>(),
-            new List<TeacherWorkingHourDto>()
+            defaultWorkingHours
         );
     }
 
@@ -305,11 +344,32 @@ else
         }
     }
 
+    private void ToggleSupervisorModule(int moduleId, bool isChecked)
+    {
+        if (edit is null) return;
+        if (isChecked)
+        {
+            if (!edit.SupervisorModuleIds.Contains(moduleId))
+                edit.SupervisorModuleIds.Add(moduleId);
+        }
+        else
+        {
+            edit.SupervisorModuleIds.RemoveAll(x => x == moduleId);
+        }
+    }
+
     private void SelectAllModules()
     {
         if (edit is null) return;
         edit.ModuleIds.Clear();
         edit.ModuleIds.AddRange(meta.Modules.Select(m => m.Id));
+    }
+
+    private void SelectAllSupervisorModules()
+    {
+        if (edit is null) return;
+        edit.SupervisorModuleIds.Clear();
+        edit.SupervisorModuleIds.AddRange(meta.Modules.Select(m => m.Id));
     }
 
     
@@ -339,7 +399,7 @@ else
         if (enable)
         {
             if (!edit.WorkingHours.Any(x => x.DayOfWeek == serverDay))
-                edit.WorkingHours.Add(new TeacherWorkingHourDto(serverDay, "09:00", "17:00"));
+                edit.WorkingHours.Add(new TeacherWorkingHourDto(serverDay, DefaultWhStart, DefaultWhEnd));
         }
         else
         {
@@ -353,7 +413,7 @@ else
         var row = edit.WorkingHours.FirstOrDefault(x => x.DayOfWeek == serverDay);
         if (row is null)
         {
-            row = new TeacherWorkingHourDto(serverDay, val ?? "09:00", "17:00");
+            row = new TeacherWorkingHourDto(serverDay, val ?? DefaultWhStart, DefaultWhEnd);
             edit.WorkingHours.Add(row);
         }
         else row.Start = val ?? row.Start;
@@ -365,7 +425,7 @@ else
         var row = edit.WorkingHours.FirstOrDefault(x => x.DayOfWeek == serverDay);
         if (row is null)
         {
-            row = new TeacherWorkingHourDto(serverDay, "09:00", val ?? "17:00");
+            row = new TeacherWorkingHourDto(serverDay, DefaultWhStart, val ?? DefaultWhEnd);
             edit.WorkingHours.Add(row);
         }
         else row.End = val ?? row.End;

@@ -4,6 +4,7 @@ using BlazorWasmDotNet8AspNetCoreHosted.Server.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20251127113604_ModuleSupervisorsAndSelfStudy")]
+    partial class ModuleSupervisorsAndSelfStudy
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -222,6 +225,9 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Migrations
                         .IsRequired()
                         .HasColumnType("longtext");
 
+                    b.Property<string>("Competences")
+                        .HasColumnType("longtext");
+
                     b.Property<int>("CourseId")
                         .HasColumnType("int");
 
@@ -229,6 +235,12 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("decimal(6,2)")
                         .HasDefaultValue(0m);
+
+                    b.Property<string>("LearningOutcomes")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ReportingForm")
+                        .HasColumnType("longtext");
 
                     b.Property<string>("Title")
                         .IsRequired()

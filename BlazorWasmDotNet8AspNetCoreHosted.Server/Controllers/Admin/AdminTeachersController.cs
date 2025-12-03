@@ -25,7 +25,8 @@ public class AdminTeachersController(AppDbContext db) : ControllerBase
     private static TeacherViewDto ToViewDto(
         Teacher t,
         List<TeacherCourseLoad> loads,
-        List<TeacherWorkingHour> wh) =>
+        List<TeacherWorkingHour> wh,
+        List<int> supervisorModuleIds) =>
         new TeacherViewDto
         {
             Id = t.Id,
@@ -33,6 +34,7 @@ public class AdminTeachersController(AppDbContext db) : ControllerBase
             ScientificDegree = t.ScientificDegree,
             AcademicTitle = t.AcademicTitle,
             ModuleIds = t.TeacherModules.Select(tm => tm.ModuleId).ToList(),
+            SupervisorModuleIds = supervisorModuleIds,
             Loads = loads
                 .Select(l => new TeacherLoadDto(l.CourseId, l.IsActive, l.ScheduledHours))
                 .ToList(),
@@ -44,6 +46,7 @@ public class AdminTeachersController(AppDbContext db) : ControllerBase
     private static TeacherEditDto ToEditDto(
         Teacher t,
         List<int> moduleIds,
+        List<int> supervisorModuleIds,
         List<TeacherCourseLoad> loads,
         List<TeacherWorkingHour> wh) =>
         new TeacherEditDto(
@@ -52,6 +55,7 @@ public class AdminTeachersController(AppDbContext db) : ControllerBase
             scientificDegree: t.ScientificDegree,
             academicTitle: t.AcademicTitle,
             moduleIds: moduleIds,
+            supervisorModuleIds: supervisorModuleIds,
             loads: loads.Select(l => new TeacherLoadDto(l.CourseId, l.IsActive, l.ScheduledHours)).ToList(),
             workingHours: wh.Select(w => new TeacherWorkingHourDto((int)w.DayOfWeek, T(w.Start), T(w.End))).ToList()
         );
@@ -77,11 +81,18 @@ public class AdminTeachersController(AppDbContext db) : ControllerBase
             .Where(w => ids.Contains(w.TeacherId))
             .ToListAsync();
 
+        var supervisorLinks = await db.ModuleSupervisors
+            .AsNoTracking()
+            .Where(ms => ids.Contains(ms.TeacherId))
+            .GroupBy(ms => ms.TeacherId)
+            .ToDictionaryAsync(g => g.Key, g => g.Select(x => x.ModuleId).ToList());
+
         var result = teachers
             .Select(t => ToViewDto(
                 t,
                 loads.Where(l => l.TeacherId == t.Id).ToList(),
-                wh.Where(w => w.TeacherId == t.Id).ToList()))
+                wh.Where(w => w.TeacherId == t.Id).ToList(),
+                supervisorLinks.TryGetValue(t.Id, out var sup) ? sup : new List<int>()))
             .ToList();
 
         return Ok(result);
@@ -94,11 +105,13 @@ public class AdminTeachersController(AppDbContext db) : ControllerBase
         var t = await db.Teachers
             .AsNoTracking()
             .Include(x => x.TeacherModules)
+            .Include(x => x.ModuleSupervisions)
             .FirstOrDefaultAsync(x => x.Id == id);
 
         if (t is null) return NotFound(new { message = $"Викладача {id} не знайдено" });
 
         var moduleIds = t.TeacherModules.Select(tm => tm.ModuleId).ToList();
+        var supervisorModuleIds = t.ModuleSupervisions.Select(ms => ms.ModuleId).ToList();
 
         var loads = await db.TeacherCourseLoads
             .AsNoTracking()
@@ -110,7 +123,7 @@ public class AdminTeachersController(AppDbContext db) : ControllerBase
             .Where(w => w.TeacherId == id)
             .ToListAsync();
 
-        return Ok(ToEditDto(t, moduleIds, loads, wh));
+        return Ok(ToEditDto(t, moduleIds, supervisorModuleIds, loads, wh));
     }
 
     
@@ -126,6 +139,7 @@ public class AdminTeachersController(AppDbContext db) : ControllerBase
         {
             var existing = await db.Teachers
                 .Include(t => t.TeacherModules)
+                .Include(t => t.ModuleSupervisions)
                 .FirstOrDefaultAsync(t => t.Id == id);
 
             if (existing is null)
@@ -138,12 +152,18 @@ public class AdminTeachersController(AppDbContext db) : ControllerBase
 
             
             db.TeacherModules.RemoveRange(entity.TeacherModules);
+            db.ModuleSupervisors.RemoveRange(entity.ModuleSupervisions);
             await db.SaveChangesAsync();
 
             var newLinks = (dto.ModuleIds ?? new())
                 .Distinct()
                 .Select(mid => new TeacherModule { TeacherId = entity.Id, ModuleId = mid });
             await db.TeacherModules.AddRangeAsync(newLinks);
+
+            var newSupLinks = (dto.SupervisorModuleIds ?? new())
+                .Distinct()
+                .Select(mid => new ModuleSupervisor { TeacherId = entity.Id, ModuleId = mid });
+            await db.ModuleSupervisors.AddRangeAsync(newSupLinks);
         }
         else
         {
@@ -161,6 +181,13 @@ public class AdminTeachersController(AppDbContext db) : ControllerBase
                 var links = dto.ModuleIds.Distinct()
                     .Select(mid => new TeacherModule { TeacherId = entity.Id, ModuleId = mid });
                 await db.TeacherModules.AddRangeAsync(links);
+            }
+
+            if (dto.SupervisorModuleIds?.Count > 0)
+            {
+                var supLinks = dto.SupervisorModuleIds.Distinct()
+                    .Select(mid => new ModuleSupervisor { TeacherId = entity.Id, ModuleId = mid });
+                await db.ModuleSupervisors.AddRangeAsync(supLinks);
             }
         }
 
@@ -235,6 +262,7 @@ public class AdminTeachersController(AppDbContext db) : ControllerBase
         db.TeacherCourseLoads.RemoveRange(db.TeacherCourseLoads.Where(l => l.TeacherId == id));
         db.TeacherWorkingHours.RemoveRange(db.TeacherWorkingHours.Where(w => w.TeacherId == id));
         db.TeacherModules.RemoveRange(db.TeacherModules.Where(tm => tm.TeacherId == id));
+        db.ModuleSupervisors.RemoveRange(db.ModuleSupervisors.Where(ms => ms.TeacherId == id));
         db.Teachers.Remove(t);
 
         await db.SaveChangesAsync();

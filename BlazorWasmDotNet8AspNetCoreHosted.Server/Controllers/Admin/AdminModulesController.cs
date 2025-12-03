@@ -9,6 +9,8 @@ using BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Infrastructure;
 using BlazorWasmDotNet8AspNetCoreHosted.Server.Domain.Entities;
 using BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
+using BlazorWasmDotNet8AspNetCoreHosted.Server.Application;
+using Microsoft.AspNetCore.Http;
 
 namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Admin;
 
@@ -21,12 +23,6 @@ namespace BlazorWasmDotNet8AspNetCoreHosted.Server.Controllers.Admin;
 [Route("api/admin/modules")]
 public class AdminModulesController(AppDbContext db) : ControllerBase
 {
-    
-    private static readonly Regex TopicCodeRegex = new(@"^\d+(\.\d+)*$", RegexOptions.Compiled);
-    
-    
-    
-    
     
     
     [HttpGet]
@@ -41,9 +37,6 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
                 m.Title,
                 m.CourseId,
                 m.Credits,
-                m.Competences,
-                m.LearningOutcomes,
-                m.ReportingForm,
                 
                 AllowedRoomIds = m.AllowedRooms.Select(ar => ar.RoomId).ToList(),
                 AllowedBuildingIds = m.AllowedBuildings.Select(ab => ab.BuildingId).ToList(),
@@ -85,9 +78,6 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
             m.CourseId = dto.CourseId;
             
             m.Credits = dto.Credits;
-            m.Competences = dto.Competences;
-            m.LearningOutcomes = dto.LearningOutcomes;
-            m.ReportingForm = dto.ReportingForm;
 
             
             var oldRoomIds = m.AllowedRooms.Select(x => x.RoomId).ToHashSet();
@@ -159,10 +149,7 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
                 Code = dto.Code,
                 Title = dto.Title,
                 CourseId = dto.CourseId,
-                Credits = dto.Credits,
-                Competences = dto.Competences,
-                LearningOutcomes = dto.LearningOutcomes,
-                ReportingForm = dto.ReportingForm
+                Credits = dto.Credits
             };
             db.Modules.Add(m);
             await db.SaveChangesAsync();
@@ -301,6 +288,8 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
         var topicIds = topics.Select(t => t.Id).ToList();
         var plannedDict = new Dictionary<int, List<string>>();
         var completedDict = new Dictionary<int, List<string>>();
+        var plannedHoursDict = new Dictionary<int, Dictionary<string, TopicGroupHoursDto>>();
+        var completedHoursDict = new Dictionary<int, Dictionary<string, TopicGroupHoursDto>>();
 
         if (topicIds.Count > 0)
         {
@@ -318,6 +307,7 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
                     di.Id,
                     di.ModuleTopicId,
                     di.BatchKey,
+                    di.IsSelfStudy,
                     LessonTypeCode = di.LessonType != null ? (di.LessonType.Code ?? "") : "",
                     GroupName = di.Group != null ? di.Group.Name : null
                 })
@@ -367,6 +357,20 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
                 {
                     groups.Add(row.GroupName);
                 }
+
+                if (!plannedHoursDict.TryGetValue(resolvedTopicId.Value, out var hoursByGroup))
+                {
+                    hoursByGroup = new Dictionary<string, TopicGroupHoursDto>(StringComparer.CurrentCultureIgnoreCase);
+                    plannedHoursDict[resolvedTopicId.Value] = hoursByGroup;
+                }
+
+                if (!hoursByGroup.TryGetValue(row.GroupName, out var stat))
+                {
+                    stat = new TopicGroupHoursDto(row.GroupName, 0, 0);
+                }
+                var aud = stat.AuditoriumHours + (row.IsSelfStudy ? 0 : 1);
+                var self = stat.SelfStudyHours + (row.IsSelfStudy ? 1 : 0);
+                hoursByGroup[row.GroupName] = new TopicGroupHoursDto(row.GroupName, aud, self);
             }
 
             foreach (var kvp in plannedDict.ToList())
@@ -374,22 +378,49 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
                 plannedDict[kvp.Key] = kvp.Value.OrderBy(x => x).ToList();
             }
 
-            completedDict = await db.ScheduleItems
+            var completedRows = await db.ScheduleItems
                 .Where(si => si.ModuleTopicId != null && topicIds.Contains(si.ModuleTopicId!.Value))
                 .Include(si => si.LessonType)
                 .Where(si =>
                     si.LessonType != null
                     && !excludeCompletedCodes.Contains((si.LessonType.Code ?? "").ToUpper()))
-                .Select(si => new { TopicId = si.ModuleTopicId!.Value, GroupName = si.Group.Name })
-                .Distinct()
+                .Select(si => new { TopicId = si.ModuleTopicId!.Value, GroupName = si.Group.Name, si.IsSelfStudy })
+                .ToListAsync();
+
+            completedDict = completedRows
+                .DistinctBy(x => new { x.TopicId, x.GroupName })
                 .GroupBy(x => x.TopicId)
-                .ToDictionaryAsync(g => g.Key, g => g.Select(x => x.GroupName).OrderBy(x => x).ToList());
+                .ToDictionary(g => g.Key, g => g.Select(x => x.GroupName).OrderBy(x => x).ToList());
+
+            foreach (var row in completedRows)
+            {
+                if (string.IsNullOrWhiteSpace(row.GroupName)) continue;
+                if (!completedHoursDict.TryGetValue(row.TopicId, out var hoursByGroup))
+                {
+                    hoursByGroup = new Dictionary<string, TopicGroupHoursDto>(StringComparer.CurrentCultureIgnoreCase);
+                    completedHoursDict[row.TopicId] = hoursByGroup;
+                }
+
+                if (!hoursByGroup.TryGetValue(row.GroupName, out var stat))
+                {
+                    stat = new TopicGroupHoursDto(row.GroupName, 0, 0);
+                }
+                var aud = stat.AuditoriumHours + (row.IsSelfStudy ? 0 : 1);
+                var self = stat.SelfStudyHours + (row.IsSelfStudy ? 1 : 0);
+                hoursByGroup[row.GroupName] = new TopicGroupHoursDto(row.GroupName, aud, self);
+            }
         }
 
         var result = topics.Select(t =>
         {
             var planned = plannedDict.TryGetValue(t.Id, out var pg) ? new List<string>(pg) : new List<string>();
             var completed = completedDict.TryGetValue(t.Id, out var cg) ? new List<string>(cg) : new List<string>();
+            var plannedHours = plannedHoursDict.TryGetValue(t.Id, out var ph)
+                ? ph.Values.OrderBy(x => x.GroupName, StringComparer.CurrentCultureIgnoreCase).ToList()
+                : new List<TopicGroupHoursDto>();
+            var completedHours = completedHoursDict.TryGetValue(t.Id, out var ch)
+                ? ch.Values.OrderBy(x => x.GroupName, StringComparer.CurrentCultureIgnoreCase).ToList()
+                : new List<TopicGroupHoursDto>();
             var lessonTypeCode = t.LessonType?.Code ?? string.Empty;
             var lessonTypeName = t.LessonType?.Name ?? string.Empty;
             return new ModuleTopicViewDto(
@@ -404,7 +435,9 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
                 t.AuditoriumHours,
                 t.SelfStudyHours,
                 planned,
-                completed
+                completed,
+                plannedHours,
+                completedHours
             );
         }).ToList();
 
@@ -427,9 +460,6 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
 
         if (string.IsNullOrWhiteSpace(trimmedTopicCode))
             return BadRequest("Topic code is required");
-
-        if (!TopicCodeRegex.IsMatch(trimmedTopicCode))
-            return BadRequest("Invalid topic code format");
 
         var normalizedTopicCode = trimmedTopicCode;
         var topicId = dto.Id ?? 0;
@@ -495,6 +525,37 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
         db.ModuleTopics.Remove(topic);
         await db.SaveChangesAsync();
         await RecalculateModuleTopicOrder(moduleId);
+        return NoContent();
+    }
+
+    [HttpPost("import-docx")]
+    public async Task<ActionResult<DocxImportResultDto>> ImportDocx([FromForm] IFormFile file, [FromQuery] bool apply = false, CancellationToken ct = default)
+    {
+        var service = new DocxImportService();
+        var result = await service.ImportAsync(file, db, apply, ct);
+
+        if (!string.IsNullOrWhiteSpace(result.Error))
+        {
+            return BadRequest(new { message = result.Error, warnings = result.Warnings });
+        }
+
+        return Ok(result);
+    }
+
+    [HttpPost("clear-all")]
+    public async Task<IActionResult> ClearAll()
+    {
+        // Обережно: тотальне очищення модулів і пов'язаних планів.
+        await db.ModuleTopics.ExecuteDeleteAsync();
+        await db.ModulePlans.ExecuteDeleteAsync();
+        await db.ModuleSequenceItems.ExecuteDeleteAsync();
+        await db.ModuleFillers.ExecuteDeleteAsync();
+        await db.ModuleRooms.ExecuteDeleteAsync();
+        await db.ModuleBuildings.ExecuteDeleteAsync();
+        await db.ModuleCourses.ExecuteDeleteAsync();
+        await db.TeacherModules.ExecuteDeleteAsync();
+        await db.ModuleSupervisors.ExecuteDeleteAsync();
+        await db.Modules.ExecuteDeleteAsync();
         return NoContent();
     }
 

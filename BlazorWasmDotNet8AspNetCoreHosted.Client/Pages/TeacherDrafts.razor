@@ -39,6 +39,11 @@
     private readonly Dictionary<int, List<ModuleTopicViewDto>> _topicsCache = new();
     private readonly Dictionary<int, int?> _lessonTypeRoomCache = new();
     private List<ModuleTopicViewDto> TopicsForModule(int moduleId) => _topicsCache.TryGetValue(moduleId, out var list) ? list : new List<ModuleTopicViewDto>();
+    private List<IdCodeNameDto> AllowedLessonTypes =>
+        _meta?.LessonTypes
+            .Where(lt => string.Equals(lt.Code, "EXAM", StringComparison.OrdinalIgnoreCase)
+                      || string.Equals(lt.Code, "CREDIT", StringComparison.OrdinalIgnoreCase))
+            .ToList() ?? new();
     private DraftUpsertRequest? _edit;
     private bool _unrestrictedMode;
     private bool _isExporting;
@@ -288,6 +293,16 @@
         };
     }
 
+    private void EnsureAllowedLessonType()
+    {
+        if (_edit is null) return;
+        var allowed = AllowedLessonTypes;
+        if (allowed.Count == 0) return;
+        var currentAllowed = allowed.Any(lt => lt.Id == _edit.LessonTypeId);
+        var targetId = currentAllowed ? _edit.LessonTypeId : allowed.First().Id;
+        ApplyLessonType(targetId);
+    }
+
     private void OnRoomChanged(ChangeEventArgs e)
     {
         if (_edit is null) return;
@@ -312,7 +327,7 @@
     }
 
     private static string DraftLessonModeLabel(bool requiresRoom)
-        => requiresRoom ? "Аудиторний захід" : "Дистанційна форма";
+        => requiresRoom ? "Аудиторна година" : "Без аудиторії";
 
     private async Task OnModuleChanged(ChangeEventArgs e)
     {
@@ -334,6 +349,19 @@
         await EnsureTopicsLoaded(_edit.ModuleId);
         ApplyTopicSelection(topicId);
     }
+
+    private void OnLessonTypeChanged(ChangeEventArgs e)
+    {
+        if (_edit is null) return;
+        var ltId = int.TryParse(e.Value?.ToString(), out var parsed) ? parsed : (int?)null;
+        if (ltId is null)
+        {
+            var fallback = AllowedLessonTypes.FirstOrDefault()?.Id;
+            ApplyLessonType(fallback);
+            return;
+        }
+        ApplyLessonType(ltId);
+    }
     private async Task StartEdit(TeacherDraftItemDto item)
     {
         await EnsureTopicsLoaded(item.ModuleId);
@@ -353,11 +381,13 @@
             OverrideNonWorkingDay: false,
             BatchKey: item.BatchKey,
             IsLocked: item.IsLocked,
-            IgnoreValidationErrors: _unrestrictedMode
+            IgnoreValidationErrors: _unrestrictedMode,
+            IsSelfStudy: item.IsSelfStudy
         );
         _edit = NormalizeRequest(initialRequest);
         ApplyLessonType(_edit.LessonTypeId);
         ApplyTopicSelection(item.ModuleTopicId);
+        EnsureAllowedLessonType();
         _extraAssignments.Clear();
     }
     private async Task StartCreate(int dayNumber, string start, string end)
@@ -423,12 +453,14 @@
             OverrideNonWorkingDay: false,
             BatchKey: null,
             IsLocked: false,
-            IgnoreValidationErrors: _unrestrictedMode
+            IgnoreValidationErrors: _unrestrictedMode,
+            IsSelfStudy: false
         );
 
         _edit = NormalizeRequest(draftRequest);
         ApplyLessonType(_edit.LessonTypeId);
         ApplyTopicSelection(defaultTopic?.Id);
+        EnsureAllowedLessonType();
     }
 
     private List<DateOnly> GetWeekDates()
@@ -1055,12 +1087,8 @@
 
     private sealed record EffectiveSlotsResponse(int? courseId, bool usingCourseSpecific, List<TimeSlotDto> slots);
 
-    static string CssByCode(string code) => code switch
+static string CssByCode(string code) => code switch
     {
-        "LECTURE" => "c1",
-        "SEMINAR" => "c2",
-        "LAB" => "c3",
-        "PRACTICE" => "c4",
         "CANCELED" => "can",
         "RESCHEDULED" => "res",
         "BREAK" => "brk",
@@ -1382,8 +1410,8 @@ else
                                                 }
                                                 <div class="td-cell-meta">
                                                     <span>@item.LessonTypeName</span>
-                                                    <span class="td-slot-mode">@DraftLessonModeLabel(item.RequiresRoom)</span>
-                                                    @if (item.RequiresRoom && !string.IsNullOrWhiteSpace(item.Room))
+                                                    <span class="td-slot-mode">@((item.IsSelfStudy ? "Самостійна година" : "Аудиторна година"))</span>
+                                                    @if (!item.IsSelfStudy && item.RequiresRoom && !string.IsNullOrWhiteSpace(item.Room))
                                                     {
                                                         <span>Ауд. @item.Room</span>
                                                     }
@@ -1465,6 +1493,8 @@ else
                 var selectedTopic = _edit!.ModuleTopicId is int topicId
                     ? moduleTopics.FirstOrDefault(t => t.Id == topicId)
                     : null;
+                var lessonTypes = AllowedLessonTypes;
+                var selectedLessonType = lessonTypes.FirstOrDefault(lt => lt.Id == _edit!.LessonTypeId) ?? lessonTypes.FirstOrDefault();
             }
             <div class="editor-grid">
             <div class="editor-field">
@@ -1552,10 +1582,21 @@ else
                 </select>
             </div>
 
+            <div class="editor-field">
+                <label>Тип заняття</label>
+                <select class="select" @onchange="OnLessonTypeChanged">
+                    @foreach (var lt in AllowedLessonTypes)
+                    {
+                        <option value="@lt.Id" selected="@(@lt.Id == _edit!.LessonTypeId)">
+                            @lt.Name
+                        </option>
+                    }
+                </select>
+            </div>
+
             <div class="editor-field editor-field--align-right">
                 <label>
                     Аудиторія
-                    <span class="td-room-mode @(_edit.RequiresRoom ? "td-room-mode--required" : "td-room-mode--optional")">@DraftLessonModeLabel(_edit.RequiresRoom)</span>
                 </label>
                 <select class="select" @onchange="OnRoomChanged" disabled="@(!_edit.RequiresRoom)">
                     <option value="">(без аудиторії)</option>

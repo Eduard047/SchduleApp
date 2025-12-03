@@ -3,7 +3,7 @@ using System.Collections.Generic;
 namespace BlazorWasmDotNet8AspNetCoreHosted.Shared.DTOs;
 
 /// <summary>
-/// DTO для опису тем модуля під час редагування.
+/// DTO для зміни теми модуля в адмінці.
 /// </summary>
 public record ModuleTopicDto(
     int? Id,
@@ -16,8 +16,14 @@ public record ModuleTopicDto(
     int SelfStudyHours
 );
 
+public record TopicGroupHoursDto(
+    string GroupName,
+    int AuditoriumHours,
+    int SelfStudyHours
+);
+
 /// <summary>
-/// DTO для перегляду тем модуля разом з інформацією про групи.
+/// DTO для відображення теми модуля з плануванням по групах.
 /// </summary>
 public record ModuleTopicViewDto(
     int Id,
@@ -31,5 +37,7 @@ public record ModuleTopicViewDto(
     int AuditoriumHours,
     int SelfStudyHours,
     List<string> PlannedGroups,
-    List<string> CompletedGroups
+    List<string> CompletedGroups,
+    List<TopicGroupHoursDto>? PlannedGroupsHours = null,
+    List<TopicGroupHoursDto>? CompletedGroupsHours = null
 );
