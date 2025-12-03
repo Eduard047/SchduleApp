@@ -266,8 +266,15 @@ else
         edit = await Http.GetFromJsonAsync<TeacherEditDto>($"api/admin/teachers/{id}");
     }
 
+    private const string DefaultWhStart = "08:30";
+    private const string DefaultWhEnd = "19:00";
+
     private void CreateNew()
     {
+        var defaultWorkingHours = Enumerable.Range(0, 7)
+            .Select(ui => new TeacherWorkingHourDto((ui + 1) % 7, DefaultWhStart, DefaultWhEnd))
+            .ToList();
+
         edit = new TeacherEditDto(
             null,
             "",
@@ -276,7 +283,7 @@ else
             new List<int>(),
             new List<int>(),
             new List<TeacherLoadDto>(),
-            new List<TeacherWorkingHourDto>()
+            defaultWorkingHours
         );
     }
 
@@ -392,7 +399,7 @@ else
         if (enable)
         {
             if (!edit.WorkingHours.Any(x => x.DayOfWeek == serverDay))
-                edit.WorkingHours.Add(new TeacherWorkingHourDto(serverDay, "09:00", "17:00"));
+                edit.WorkingHours.Add(new TeacherWorkingHourDto(serverDay, DefaultWhStart, DefaultWhEnd));
         }
         else
         {
@@ -406,7 +413,7 @@ else
         var row = edit.WorkingHours.FirstOrDefault(x => x.DayOfWeek == serverDay);
         if (row is null)
         {
-            row = new TeacherWorkingHourDto(serverDay, val ?? "09:00", "17:00");
+            row = new TeacherWorkingHourDto(serverDay, val ?? DefaultWhStart, DefaultWhEnd);
             edit.WorkingHours.Add(row);
         }
         else row.Start = val ?? row.Start;
@@ -418,7 +425,7 @@ else
         var row = edit.WorkingHours.FirstOrDefault(x => x.DayOfWeek == serverDay);
         if (row is null)
         {
-            row = new TeacherWorkingHourDto(serverDay, "09:00", val ?? "17:00");
+            row = new TeacherWorkingHourDto(serverDay, DefaultWhStart, val ?? DefaultWhEnd);
             edit.WorkingHours.Add(row);
         }
         else row.End = val ?? row.End;

@@ -16,6 +16,7 @@ public sealed class DocxImportService
     private static readonly Regex ModulePrefixRegex = new(@"\b\d+\.\d+\.\d+\b", RegexOptions.Compiled);
     private static readonly Regex TopicCodeRegex = new(@"\d+(?:\.\d+){2,}", RegexOptions.Compiled);
     private static readonly Regex LetterTopicCodeRegex = new(@"[A-Za-zА-Яа-яІіЇїЄєҐґ]+\.?((\d+\.?)+)", RegexOptions.Compiled);
+    private static readonly Regex LetteredModulePrefixRegex = new(@"[A-Za-zА-Яа-яІіЇїЄєҐґ]+\.?((\d+\.?)+)", RegexOptions.Compiled);
 
     public async Task<DocxImportResultDto> ImportAsync(IFormFile file, AppDbContext db, bool apply, CancellationToken ct)
     {
@@ -118,9 +119,9 @@ public sealed class DocxImportService
 
             var rawCode = cells[0];
             if (string.IsNullOrWhiteSpace(rawCode)) continue;
-            if (!Regex.IsMatch(rawCode, @"^\d+$")) continue; // пропускаємо службові рядки типу Усього
+            if (!Regex.IsMatch(rawCode, @"^\d+(?:[\\.,]\d+)?$")) continue; // пропускаємо службові рядки типу Усього
 
-            var code = NormalizeCode(rawCode);
+            var code = NormalizeCode(rawCode.Replace(',', '.'));
             var title = NormalizeText(cells.ElementAtOrDefault(1) ?? string.Empty);
             var credits = ParseDecimal(cells.ElementAtOrDefault(2));
 
@@ -141,6 +142,8 @@ public sealed class DocxImportService
         var result = new Dictionary<string, List<DocxImportTopicDto>>(StringComparer.OrdinalIgnoreCase);
         var tableIndex = 0;
         var remainingModules = new Queue<string>(moduleOrder);
+        string? lastModuleCode = null;
+        string? lastModulePrefix = null;
         foreach (var table in tables)
         {
             var rows = table.Elements<TableRow>().ToList();
@@ -150,43 +153,90 @@ public sealed class DocxImportService
             var modulePrefixMatch = ModulePrefixRegex.Match(moduleHeader);
             string? modulePrefix = null;
             string? moduleCode = null;
+            var moduleCodeFromLetter = false;
 
             if (modulePrefixMatch.Success)
             {
                 modulePrefix = modulePrefixMatch.Value;
-                moduleCode = modulePrefix.Split('.')[0];
+                var segments = modulePrefix.Split('.');
+                var best = string.Empty;
+                for (var take = Math.Min(segments.Length, 3); take >= 1; take--)
+                {
+                    var candidate = string.Join('.', segments.Take(take));
+                    if (knownModuleCodes.Contains(candidate))
+                    {
+                        best = candidate;
+                        break;
+                    }
+                }
+                moduleCode = string.IsNullOrWhiteSpace(best) ? segments[0] : best;
             }
 
-            if (moduleCode is null)
+            var letterPrefixMatch = LetteredModulePrefixRegex.Match(moduleHeader);
+            var hasLetterPrefix = letterPrefixMatch.Success;
+            if (hasLetterPrefix)
             {
-                foreach (var code in knownModuleCodes)
+                modulePrefix ??= letterPrefixMatch.Value.Trim().Trim('.');
+            }
+
+            if (moduleCode is null && modulePrefix is not null && hasLetterPrefix)
+            {
+                var letterHead = Regex.Match(modulePrefix, @"^[A-Za-zА-Яа-яІіЇїЄєҐґ]+").Value.ToUpperInvariant();
+                if (letterHead.StartsWith("КП") && knownModuleCodes.Contains("13"))
                 {
-                    if (moduleHeader.Contains($"{code}.", StringComparison.OrdinalIgnoreCase) ||
-                        moduleHeader.Contains($"{code} ", StringComparison.OrdinalIgnoreCase) ||
-                        moduleHeader.Contains(code, StringComparison.OrdinalIgnoreCase))
+                    moduleCode = "13";
+                    moduleCodeFromLetter = true;
+                }
+                else if (letterHead.StartsWith("К") && knownModuleCodes.Contains("14"))
+                {
+                    moduleCode = "14";
+                    moduleCodeFromLetter = true;
+                }
+            }
+
+            if (moduleCode is null && !hasLetterPrefix)
+            {
+                foreach (var code in knownModuleCodes.OrderByDescending(c => c.Length))
+                {
+                    var pattern = $@"(?<![A-Za-zА-Яа-яІіЇїЄєҐґ0-9]){Regex.Escape(code)}(?=[\.\s]|$)";
+                    if (Regex.IsMatch(moduleHeader, pattern, RegexOptions.IgnoreCase))
                     {
                         moduleCode = code;
-                        modulePrefix = code;
+                        modulePrefix ??= code;
                         break;
                     }
                 }
             }
 
-            if (moduleCode is null)
+            if (moduleCode is null && tableIndex >= moduleOrder.Count && modulePrefix is not null && lastModuleCode is not null)
             {
-                // Якщо знайдений префікс у вигляді літер+цифр (наприклад, КП1.1.1) — дістаємо першу цифру як код
-                var letteredMatch = Regex.Match(moduleHeader, @"[A-Za-zА-Яа-яІіЇїЄєҐґ]{1,4}(\\d+)");
-                if (letteredMatch.Success)
-                {
-                    moduleCode = letteredMatch.Groups[1].Value;
-                    modulePrefix = moduleCode;
-                }
+                moduleCode = lastModuleCode;
+                warnings.Add($"Таблицю з префіксом \"{modulePrefix}\" прив'язано до попереднього модуля \"{moduleCode}\".");
             }
 
             if (moduleCode is null && tableIndex < moduleOrder.Count)
             {
                 moduleCode = moduleOrder[tableIndex];
-                modulePrefix = moduleCode;
+                modulePrefix ??= moduleCode;
+            }
+
+            if (modulePrefix is not null &&
+                moduleCode is not null &&
+                modulePrefix.Contains('.') &&
+                !knownModuleCodes.Contains(modulePrefix))
+            {
+                var isSameTree = moduleCodeFromLetter
+                    ? true
+                    : moduleCode.Contains('.')
+                    ? modulePrefix.StartsWith(moduleCode + ".", StringComparison.OrdinalIgnoreCase)
+                    : string.Equals(modulePrefix.Split('.')[0], moduleCode, StringComparison.OrdinalIgnoreCase);
+
+                if (!isSameTree)
+                {
+                    warnings.Add($"Пропущено таблицю тем з префіксом \"{modulePrefix}\" — такого модуля немає у переліку (уникнуто додавання тем до агрегуючого модуля \"{moduleCode}\").");
+                    tableIndex++;
+                    continue;
+                }
             }
 
             if (moduleCode is null)
@@ -198,8 +248,14 @@ public sealed class DocxImportService
                 if (remainingModules.Count > 0)
                 {
                     moduleCode = remainingModules.Dequeue();
-                    modulePrefix = moduleCode;
-                    warnings.Add($"Невідомий заголовок таблиці, прив’язано за порядком до модуля \"{moduleCode}\"");
+                    modulePrefix ??= moduleCode;
+                    warnings.Add($"Невідомий заголовок таблиці, прив'язано за порядком до модуля \"{moduleCode}\"");
+                }
+                else if (lastModuleCode is not null && modulePrefix is not null)
+                {
+                    moduleCode = lastModuleCode;
+                    modulePrefix ??= lastModulePrefix ?? moduleCode;
+                    warnings.Add("Додаткову таблицю тем прив'язано до попереднього модуля через вичерпаний перелік модулів.");
                 }
                 else
                 {
@@ -215,6 +271,9 @@ public sealed class DocxImportService
                 continue;
             }
 
+            lastModuleCode = moduleCode;
+            lastModulePrefix = modulePrefix ?? lastModulePrefix;
+
             if (!result.TryGetValue(moduleCode, out var topics))
             {
                 topics = new List<DocxImportTopicDto>();
@@ -226,9 +285,33 @@ public sealed class DocxImportService
             foreach (var row in rows.Skip(2))
             {
                 var cells = GetRowCells(row);
-                if (cells.Count != 6) continue;
+                if (cells.All(string.IsNullOrWhiteSpace)) continue;
 
-                var topicCell = cells[5];
+                if (cells.Count == 1 && !string.IsNullOrWhiteSpace(cells[0]))
+                {
+                    var headerPrefix = Regex.Match(cells[0], @"\d+(?:\.\d+)+");
+                    if (headerPrefix.Success)
+                    {
+                        modulePrefix = headerPrefix.Value.Trim().Trim('.');
+                        order = 1; // новий блок тем у тій самій таблиці — починаємо нумерацію заново
+                    }
+                    continue;
+                }
+
+                if (cells.Count == 5)
+                {
+                    // Деякі рядки (наприклад, «Залік») можуть мати пропущену колонку номера — додаємо порожню, щоб індексація збігалася.
+                    cells.Insert(0, string.Empty);
+                }
+                if (cells.Count < 5) continue;
+                if (cells.Count > 6) cells = cells.Take(6).ToList();
+
+                var topicCell = cells.ElementAtOrDefault(5) ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(topicCell))
+                {
+                    // Якщо в останній колонці порожньо, намагаємося брати назву/код теми з четвертої (інколи таблиці з'їжджають).
+                    topicCell = cells.ElementAtOrDefault(4) ?? string.Empty;
+                }
                 if (string.IsNullOrWhiteSpace(topicCell)) continue; // пропускаємо «Всього» тощо
 
                 var topicCode = ExtractTopicCode(topicCell, modulePrefix, moduleCode, order);
@@ -238,6 +321,15 @@ public sealed class DocxImportService
                 var self = ParseInt(cells[4]);
 
                 var lessonTypeName = NormalizeText(cells[1]);
+                if (string.Equals(lessonTypeName, "Залік", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(lessonTypeName, "Екзамен", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(lessonTypeName, "Всього", StringComparison.OrdinalIgnoreCase) ||
+                    lessonTypeName.StartsWith("Всього", StringComparison.OrdinalIgnoreCase) ||
+                    Regex.IsMatch(lessonTypeName, @"^\d+\.$"))
+                {
+                    // Пропускаємо заліки, екзамени, підсумкові рядки та службові номери-типи, користувач створюватиме їх вручну.
+                    continue;
+                }
 
                 topics.Add(new DocxImportTopicDto(
                     moduleCodeValue,
@@ -298,6 +390,13 @@ public sealed class DocxImportService
         var allBuildingIds = await db.Buildings.Select(b => b.Id).ToListAsync(ct);
         var allRoomIds = await db.Rooms.Select(r => r.Id).ToListAsync(ct);
 
+        // Вимикаємо активність агрегуючих модулів, якщо існують підмодулі з тим самим цілим кодом (наприклад, 6 з підмодулями 6.1, 6.2).
+        var rootModuleCodes = modules
+            .Where(m => m.Code.Contains('.'))
+            .Select(m => m.Code.Split('.')[0])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         var planDefaults = await db.ModulePlans
             .Where(p => p.CourseId == course.Id)
             .ToDictionaryAsync(p => p.ModuleId, ct);
@@ -310,7 +409,7 @@ public sealed class DocxImportService
             if (planDefaults.TryGetValue(entity.Id, out var plan))
             {
                 plan.TargetHours = targetHours;
-                plan.IsActive = true;
+                plan.IsActive = !rootModuleCodes.Contains(module.Code);
             }
             else
             {
@@ -320,7 +419,7 @@ public sealed class DocxImportService
                     ModuleId = entity.Id,
                     TargetHours = targetHours,
                     ScheduledHours = 0,
-                    IsActive = true
+                    IsActive = !rootModuleCodes.Contains(module.Code)
                 });
             }
 
@@ -454,20 +553,31 @@ public sealed class DocxImportService
 
     private static bool LooksLikeTopicTable(Table table)
     {
-        var header = table.Elements<TableRow>().FirstOrDefault();
-        if (header is null) return false;
+        var rows = table.Elements<TableRow>().Take(3).ToList();
+        if (rows.Count == 0) return false;
 
-        var cells = GetRowCells(header);
-        if (cells.Count != 6) return false;
-
-        var expected = new[] { "1", "2", "3", "4", "5", "6" };
-        for (var i = 0; i < expected.Length; i++)
+        bool IsNumericHeader(IReadOnlyList<string> cells)
         {
-            if (!string.Equals(cells[i], expected[i], StringComparison.OrdinalIgnoreCase))
-                return false;
+            if (cells.Count != 6) return false;
+            for (var i = 0; i < 6; i++)
+            {
+                var value = cells[i].Trim().Trim('.');
+                if (!Regex.IsMatch(value, @"^\d+$")) return false;
+                if (int.Parse(value) != i + 1) return false;
+            }
+            return true;
         }
 
-        return true;
+        var firstCells = GetRowCells(rows[0]);
+        if (IsNumericHeader(firstCells)) return true;
+
+        for (var i = 1; i < rows.Count; i++)
+        {
+            var cells = GetRowCells(rows[i]);
+            if (IsNumericHeader(cells)) return true;
+        }
+
+        return false;
     }
 
     private static List<string> GetRowCells(TableRow row)
@@ -481,7 +591,11 @@ public sealed class DocxImportService
     {
         if (string.IsNullOrWhiteSpace(input)) return string.Empty;
 
-        var normalized = input.Replace("\r", " ").Replace("\n", " ").Replace("\t", " ");
+        var normalized = input
+            .Replace("\r", " ")
+            .Replace("\n", " ")
+            .Replace("\t", " ")
+            .Replace('\u00A0', ' '); // прибираємо нерозривні пробіли
         while (normalized.Contains("  "))
         {
             normalized = normalized.Replace("  ", " ");
@@ -527,17 +641,24 @@ public sealed class DocxImportService
     {
         if (!string.IsNullOrWhiteSpace(topicCell))
         {
-            var numeric = TopicCodeRegex.Match(topicCell);
-            if (numeric.Success)
-            {
-                return numeric.Value.Trim().Trim('.');
-            }
+            var token = topicCell
+                .Trim()
+                .Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .FirstOrDefault();
 
-            var lettered = LetterTopicCodeRegex.Match(topicCell);
-            if (lettered.Success && !string.IsNullOrWhiteSpace(moduleCode))
+            if (!string.IsNullOrWhiteSpace(token))
             {
-                var numericPart = lettered.Groups[1].Value.Trim('.').Trim();
-                return string.IsNullOrWhiteSpace(numericPart) ? $"{moduleCode}.{order}" : $"{moduleCode}.{numericPart}";
+                var cleaned = token.Trim().Trim('.');
+
+                if (Regex.IsMatch(cleaned, @"^\d+(?:\.\d+)+$"))
+                {
+                    return cleaned;
+                }
+
+                if (Regex.IsMatch(cleaned, @"^[A-Za-zА-Яа-яІіЇїЄєҐґ]+\.?\d+(?:\.\d+)*$"))
+                {
+                    return cleaned;
+                }
             }
         }
 

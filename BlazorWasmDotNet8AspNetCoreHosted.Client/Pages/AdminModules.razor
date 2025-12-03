@@ -1492,36 +1492,57 @@ private PlanCourseVM planCourse = new();
 
     private static int CompareTopicCodes(string? left, string? right)
     {
-        var leftParts = TopicCodeSegments(left);
-        var rightParts = TopicCodeSegments(right);
-        var maxLength = Math.Max(leftParts.Count, rightParts.Count);
+        var (lp, ln) = ParseTopicCode(left);
+        var (rp, rn) = ParseTopicCode(right);
 
-        for (var i = 0; i < maxLength; i++)
+        var prefixDiff = string.Compare(lp, rp, System.StringComparison.OrdinalIgnoreCase);
+        if (prefixDiff != 0) return prefixDiff;
+
+        var maxLen = Math.Max(ln.Count, rn.Count);
+        for (var i = 0; i < maxLen; i++)
         {
-            var leftValue = i < leftParts.Count ? leftParts[i] : 0;
-            var rightValue = i < rightParts.Count ? rightParts[i] : 0;
-            var diff = leftValue.CompareTo(rightValue);
-            if (diff != 0)
-            {
-                return diff;
-            }
+            var l = i < ln.Count ? ln[i] : 0;
+            var r = i < rn.Count ? rn[i] : 0;
+            var diff = l.CompareTo(r);
+            if (diff != 0) return diff;
         }
 
         return string.Compare(left ?? string.Empty, right ?? string.Empty, System.StringComparison.Ordinal);
     }
-    /// <summary>
-    /// Розбиває код теми на числові сегменти для сортування.
-    /// </summary>
-    private static IReadOnlyList<int> TopicCodeSegments(string? code)
+
+    private static (string prefix, IReadOnlyList<int> numbers) ParseTopicCode(string? code)
     {
-        if (string.IsNullOrWhiteSpace(code))
+        if (string.IsNullOrWhiteSpace(code)) return (string.Empty, System.Array.Empty<int>());
+
+        var parts = code.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return (string.Empty, System.Array.Empty<int>());
+
+        var first = parts[0];
+        var match = Regex.Match(first, @"^([A-Za-zА-Яа-яІіЇїЄєҐґ]+)?(\d+)?$");
+
+        var prefix = match.Success ? match.Groups[1].Value : string.Empty;
+        var numbers = new List<int>(parts.Length);
+
+        if (match.Success && match.Groups[2].Success && int.TryParse(match.Groups[2].Value, out var headNum))
         {
-            return System.Array.Empty<int>();
+            numbers.Add(headNum);
+        }
+        else if (int.TryParse(first, out var numericFirst))
+        {
+            numbers.Add(numericFirst);
+        }
+        else
+        {
+            // якщо не вдалося розібрати — ставимо MaxValue, щоб такі коди йшли наприкінці
+            numbers.Add(int.MaxValue);
         }
 
-        return code.Split('.', StringSplitOptions.RemoveEmptyEntries)
-            .Select(part => int.TryParse(part, out var value) ? value : int.MaxValue)
-            .ToArray();
+        foreach (var p in parts.Skip(1))
+        {
+            numbers.Add(int.TryParse(p, out var val) ? val : int.MaxValue);
+        }
+
+        return (prefix, numbers);
     }
 
 
