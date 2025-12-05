@@ -193,6 +193,7 @@ public class ModuleTopic
     public int AuditoriumHours { get; set; }
     public int SelfStudyHours { get; set; }
     public bool IsInterAssembly { get; set; }
+    public bool SelfStudyBySupervisor { get; set; }
 }
 
 

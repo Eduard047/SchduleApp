@@ -507,7 +507,12 @@
     private static string TopicOptionCaption(ModuleTopicViewDto topic)
     {
         var codePart = string.IsNullOrWhiteSpace(topic.TopicCode) ? null : topic.TopicCode.Trim();
-        return codePart ?? string.Empty;
+        var caption = codePart ?? string.Empty;
+        if (topic.SelfStudyBySupervisor && topic.SelfStudyHours > 0)
+        {
+            caption = string.IsNullOrWhiteSpace(caption) ? "Самостійні години (керівник)" : $"{caption} | керівник";
+        }
+        return caption;
     }
 
     private static Dictionary<(int DayNumber, string Start, string End, int GroupId), TeacherDraftItemDto> BuildLookup(IEnumerable<TeacherDraftItemDto> items)

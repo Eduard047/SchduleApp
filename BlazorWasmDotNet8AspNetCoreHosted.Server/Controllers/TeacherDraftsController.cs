@@ -850,27 +850,66 @@ public sealed class TeacherDraftsController : ControllerBase
             .ThenBy(t => t.TopicCode)
             .ToListAsync();
         var allowedTopicIds = topicsRaw.Select(t => t.Id).ToHashSet();
+        var flaggedSelfStudyTopicIds = topicsRaw
+            .Where(t => t.SelfStudyBySupervisor && t.SelfStudyHours > 0)
+            .Select(t => t.Id)
+            .ToHashSet();
         var topicsByModule = topicsRaw
             .GroupBy(t => t.ModuleId)
             .ToDictionary(g => g.Key, g => g.ToList());
+        var selfStudyTopicsByModule = topicsByModule
+            .ToDictionary(
+                kvp => kvp.Key,
+                kvp => kvp.Value
+                    .Where(t => t.SelfStudyBySupervisor && t.SelfStudyHours > 0)
+                    .OrderBy(t => t.TopicCode, StringComparer.Ordinal)
+                    .ToList());
         var topicUsageLimitById = topicsRaw
             .ToDictionary(t => t.Id, t => Math.Max(0, t.AuditoriumHours));
         var moduleAuditoriumHours = topicsByModule
             .ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Sum(t => Math.Max(0, t.AuditoriumHours)));
         var moduleSelfStudyHours = topicsByModule
-            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Sum(t => Math.Max(0, t.SelfStudyHours)));
+            .ToDictionary(
+                kvp => kvp.Key,
+                kvp => kvp.Value
+                    .Where(t => t.SelfStudyBySupervisor)
+                    .Sum(t => Math.Max(0, t.SelfStudyHours)));
         var selfStudyAssignmentsDraft = await _db.TeacherDraftItems
-            .Where(di => di.IsSelfStudy && courseIds.Contains(di.Group.CourseId))
+            .Where(di => di.IsSelfStudy
+                         && courseIds.Contains(di.Group.CourseId)
+                         && (di.ModuleTopicId == null || flaggedSelfStudyTopicIds.Contains(di.ModuleTopicId.Value)))
             .Select(di => new { di.GroupId, di.ModuleId })
             .ToListAsync();
         var selfStudyAssignmentsSchedule = await _db.ScheduleItems
-            .Where(si => si.IsSelfStudy && courseIds.Contains(si.Group.CourseId))
+            .Where(si => si.IsSelfStudy
+                         && courseIds.Contains(si.Group.CourseId)
+                         && (si.ModuleTopicId == null || flaggedSelfStudyTopicIds.Contains(si.ModuleTopicId.Value)))
             .Select(si => new { si.GroupId, si.ModuleId })
+            .ToListAsync();
+        var selfStudyTopicAssignmentsDraft = await _db.TeacherDraftItems
+            .Where(di => di.IsSelfStudy
+                         && di.ModuleTopicId != null
+                         && flaggedSelfStudyTopicIds.Contains(di.ModuleTopicId!.Value)
+                         && courseIds.Contains(di.Group.CourseId))
+            .GroupBy(di => new { di.GroupId, di.ModuleId, TopicId = di.ModuleTopicId!.Value })
+            .Select(g => new { g.Key.GroupId, g.Key.ModuleId, g.Key.TopicId, C = g.Count() })
+            .ToListAsync();
+        var selfStudyTopicAssignmentsSchedule = await _db.ScheduleItems
+            .Where(si => si.IsSelfStudy
+                         && si.ModuleTopicId != null
+                         && flaggedSelfStudyTopicIds.Contains(si.ModuleTopicId!.Value)
+                         && courseIds.Contains(si.Group.CourseId))
+            .GroupBy(si => new { si.GroupId, si.ModuleId, TopicId = si.ModuleTopicId!.Value })
+            .Select(g => new { g.Key.GroupId, g.Key.ModuleId, g.Key.TopicId, C = g.Count() })
             .ToListAsync();
         var selfStudyAssignments = selfStudyAssignmentsDraft
             .Concat(selfStudyAssignmentsSchedule)
             .GroupBy(x => (x.GroupId, x.ModuleId))
             .ToDictionary(g => g.Key, g => g.Count());
+        var selfStudyTopicAssignments = selfStudyTopicAssignmentsDraft
+            .Concat(selfStudyTopicAssignmentsSchedule)
+            .GroupBy(x => (x.GroupId, x.ModuleId, x.TopicId))
+            .ToDictionary(g => g.Key, g => g.Sum(x => x.C));
         var topicAssignmentsDraft = await _db.TeacherDraftItems
             .Where(di => di.ModuleTopicId != null
                          && courseIds.Contains(di.Group.CourseId)
@@ -1144,14 +1183,20 @@ public sealed class TeacherDraftsController : ControllerBase
             }
         }
 
+        var selfStudyRemainingByGroupModule = new Dictionary<(int GroupId, int ModuleId), int>();
+        var selfStudyTopicRemaining = new Dictionary<(int GroupId, int ModuleId, int TopicId), int>();
         foreach (var plan in activePlans)
         {
             if (!allGroupsByCourse.TryGetValue(plan.CourseId, out var courseGroups) || courseGroups.Count == 0)
                 continue;
 
+            var excludedSelfStudy = topicsByModule.TryGetValue(plan.ModuleId, out var tlist)
+                ? tlist.Where(t => t.SelfStudyHours > 0 && !t.SelfStudyBySupervisor).Sum(t => Math.Max(0, t.SelfStudyHours))
+                : 0;
+            var effectiveTargetHours = Math.Max(0, plan.TargetHours - excludedSelfStudy);
             int n = courseGroups.Count;
-            int baseShare = plan.TargetHours / n;
-            int extra = plan.TargetHours % n;
+            int baseShare = effectiveTargetHours / n;
+            int extra = effectiveTargetHours % n;
             var moduleMinHours =
                 (moduleAuditoriumHours.TryGetValue(plan.ModuleId, out var minHours) ? minHours : 0)
                 + (moduleSelfStudyHours.TryGetValue(plan.ModuleId, out var ssHours) ? ssHours : 0);
@@ -1164,31 +1209,53 @@ public sealed class TeacherDraftsController : ControllerBase
                 int fact = factMap.TryGetValue((gid, plan.ModuleId), out var c) ? c : 0;
                 remainingByGroupModule[(gid, plan.ModuleId)] = Math.Max(0, target - fact);
             }
-        }
-        int RemainingFor(int gid, int mid) =>
-            remainingByGroupModule.TryGetValue((gid, mid), out var left) ? left : 0;
 
-        var selfStudyRemainingByGroupModule = new Dictionary<(int GroupId, int ModuleId), int>();
-        foreach (var plan in activePlans)
-        {
-            if (!allGroupsByCourse.TryGetValue(plan.CourseId, out var courseGroups) || courseGroups.Count == 0)
+            if (!selfStudyTopicsByModule.TryGetValue(plan.ModuleId, out var ssTopics) || ssTopics.Count == 0)
                 continue;
-
-            var selfHours = moduleSelfStudyHours.TryGetValue(plan.ModuleId, out var ssTotal)
-                ? ssTotal
-                : 0;
-            if (selfHours <= 0) continue;
 
             foreach (var grpRow in courseGroups)
             {
-                var key = (grpRow.Id, plan.ModuleId);
-                var fact = selfStudyAssignments.TryGetValue(key, out var used) ? used : 0;
-                selfStudyRemainingByGroupModule[key] = Math.Max(0, selfHours - fact);
+                var total = 0;
+                foreach (var topic in ssTopics)
+                {
+                    var key = (grpRow.Id, plan.ModuleId, topic.Id);
+                    var factPerTopic = selfStudyTopicAssignments.TryGetValue(key, out var used) ? used : 0;
+                    var remaining = Math.Max(0, topic.SelfStudyHours - factPerTopic);
+                    if (remaining > 0)
+                    {
+                        selfStudyTopicRemaining[key] = remaining;
+                        total += remaining;
+                    }
+                }
+
+                if (total > 0)
+                {
+                    selfStudyRemainingByGroupModule[(grpRow.Id, plan.ModuleId)] = total;
+                }
             }
         }
-
+        int RemainingFor(int gid, int mid) =>
+            remainingByGroupModule.TryGetValue((gid, mid), out var left) ? left : 0;
         int SelfStudyRemaining(int gid, int mid) =>
             selfStudyRemainingByGroupModule.TryGetValue((gid, mid), out var left) ? left : 0;
+
+        ModuleTopic? NextSelfStudyTopic(int gid, int mid)
+        {
+            if (!selfStudyTopicsByModule.TryGetValue(mid, out var list) || list.Count == 0)
+                return null;
+
+            foreach (var t in list)
+            {
+                var key = (gid, mid, t.Id);
+                if (selfStudyTopicRemaining.TryGetValue(key, out var left) && left > 0)
+                {
+                    selfStudyTopicRemaining[key] = Math.Max(0, left - 1);
+                    return t;
+                }
+            }
+
+            return null;
+        }
 
 
 
@@ -1591,9 +1658,12 @@ public sealed class TeacherDraftsController : ControllerBase
                         int ltypeId;
                         if (isSelfStudyPlacement)
                         {
-                            topicSelection = topicsByModule.TryGetValue(moduleId, out var list)
-                                ? list.FirstOrDefault(t => t.SelfStudyHours > 0)
-                                : null;
+                            topicSelection = NextSelfStudyTopic(grp.Id, moduleId);
+                            if (topicSelection is null)
+                            {
+                                selfStudyRemainingByGroupModule[remainingKey] = 0;
+                                continue;
+                            }
                             ltypeId = topicSelection?.LessonTypeId ?? PickLessonType(grp.Id, grp.CourseId, moduleId, date).LessonTypeId;
                         }
                         else
