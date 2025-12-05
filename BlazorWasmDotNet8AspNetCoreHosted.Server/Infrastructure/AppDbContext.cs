@@ -261,6 +261,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
                 .OnDelete(DeleteBehavior.Restrict);
             e.Property(x => x.Order).HasDefaultValue(0);
             e.Property(x => x.TopicCode).HasMaxLength(64).IsRequired();
+            e.Property(x => x.IsInterAssembly).HasDefaultValue(false);
             e.HasIndex(x => new { x.ModuleId, x.Order }).IsUnique();
             e.HasIndex(x => new { x.ModuleId, x.TopicCode }).IsUnique();
         });

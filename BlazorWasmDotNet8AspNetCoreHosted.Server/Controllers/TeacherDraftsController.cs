@@ -845,10 +845,11 @@ public sealed class TeacherDraftsController : ControllerBase
 
         var moduleIdsForPlans = activePlans.Select(p => p.ModuleId).Distinct().ToList();
         var topicsRaw = await _db.ModuleTopics
-            .Where(t => moduleIdsForPlans.Contains(t.ModuleId))
+            .Where(t => moduleIdsForPlans.Contains(t.ModuleId) && !t.IsInterAssembly)
             .OrderBy(t => t.Order)
             .ThenBy(t => t.TopicCode)
             .ToListAsync();
+        var allowedTopicIds = topicsRaw.Select(t => t.Id).ToHashSet();
         var topicsByModule = topicsRaw
             .GroupBy(t => t.ModuleId)
             .ToDictionary(g => g.Key, g => g.ToList());
@@ -871,11 +872,15 @@ public sealed class TeacherDraftsController : ControllerBase
             .GroupBy(x => (x.GroupId, x.ModuleId))
             .ToDictionary(g => g.Key, g => g.Count());
         var topicAssignmentsDraft = await _db.TeacherDraftItems
-            .Where(di => di.ModuleTopicId != null && courseIds.Contains(di.Group.CourseId))
+            .Where(di => di.ModuleTopicId != null
+                         && courseIds.Contains(di.Group.CourseId)
+                         && allowedTopicIds.Contains(di.ModuleTopicId!.Value))
             .Select(di => new { di.GroupId, di.ModuleId, TopicId = di.ModuleTopicId!.Value })
             .ToListAsync();
         var topicAssignmentsSchedule = await _db.ScheduleItems
-            .Where(si => si.ModuleTopicId != null && courseIds.Contains(si.Group.CourseId))
+            .Where(si => si.ModuleTopicId != null
+                         && courseIds.Contains(si.Group.CourseId)
+                         && allowedTopicIds.Contains(si.ModuleTopicId!.Value))
             .Select(si => new { si.GroupId, si.ModuleId, TopicId = si.ModuleTopicId!.Value })
             .ToListAsync();
         var topicAssignments = new Dictionary<(int GroupId, int ModuleId), Dictionary<int, int>>();

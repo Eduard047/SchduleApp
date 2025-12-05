@@ -436,6 +436,7 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
                 t.SelfStudyHours,
                 planned,
                 completed,
+                t.IsInterAssembly,
                 plannedHours,
                 completedHours
             );
@@ -500,6 +501,7 @@ public class AdminModulesController(AppDbContext db) : ControllerBase
         entity.TotalHours = totalHours;
         entity.AuditoriumHours = safeAuditorium;
         entity.SelfStudyHours = safeSelfStudy;
+        entity.IsInterAssembly = dto.IsInterAssembly;
 
         if (entity.AuditoriumHours + entity.SelfStudyHours > entity.TotalHours)
             return BadRequest("Hourly totals exceed overall value");
